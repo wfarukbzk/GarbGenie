@@ -1,29 +1,27 @@
-import React from 'react';
 import { Tabs } from 'expo-router';
-import { Shirt, Sparkles, User } from 'lucide-react-native';
+import { Home, Shirt, User } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
     <Tabs screenOptions={{ 
-      tabBarActiveTintColor: '#000', // Şık bir siyah
-      headerShown: true,
-      headerTitleStyle: { fontWeight: 'bold' } 
+      tabBarActiveTintColor: '#000', 
+      headerShown: false,
+      tabBarStyle: { height: 60, paddingBottom: 10 }
     }}>
       <Tabs.Screen
-        name="index"
+        name="home"
         options={{
-          title: 'Kombin Doktoru',
-          tabBarIcon: ({ color }) => <Sparkles size={24} color={color} />,
+          title: 'Ana Sayfa',
+          tabBarIcon: ({ color }) => <Home size={24} color={color} />,
         }}
       />
       <Tabs.Screen
         name="wardrobe"
         options={{
-          title: 'Gardırobum',
+          title: 'Dolabım',
           tabBarIcon: ({ color }) => <Shirt size={24} color={color} />,
         }}
       />
-      {/* İleride Profil ekranı eklemek isterseniz hazır dursun */}
       <Tabs.Screen
         name="profile"
         options={{
@@ -31,6 +29,8 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <User size={24} color={color} />,
         }}
       />
+      {/* Modal'ı navigasyondan gizliyoruz kanka */}
+      <Tabs.Screen name="modal" options={{ href: null }} />
     </Tabs>
   );
 }

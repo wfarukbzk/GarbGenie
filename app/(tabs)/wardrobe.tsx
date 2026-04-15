@@ -1,18 +1,48 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, FlatList, Modal, Dimensions } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Plus, Image as ImageIcon, Trash2, Save } from 'lucide-react-native';
+import { Plus, Image as ImageIcon, Trash2, Save, X } from 'lucide-react-native';
 // @ts-ignore
 import { supabase } from '../../supabase'; 
+
+const { width } = Dimensions.get('window');
+const COLUMN_WIDTH = width / 2 - 25;
 
 const CATEGORIES = ['Üst Giyim', 'Alt Giyim', 'Ayakkabı', 'Dış Giyim'];
 const SEASONS = ['Yazlık', 'Kışlık', 'Bahar'];
 
 export default function WardrobeScreen() {
+  // Liste State'leri
+  const [clothes, setClothes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  // Ekleme Formu State'leri (Arkadaşının kodundan)
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [category, setCategory] = useState<string | null>(null);
   const [season, setSeason] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<boolean>(false);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => { fetchClothes(); }, []);
+
+  const fetchClothes = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('clothes')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setClothes(data || []);
+    } catch (error: any) {
+      console.error(error.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   const pickImage = async (useCamera: boolean) => {
     const options: any = { allowsEditing: true, aspect: [3, 4], quality: 0.5 };
@@ -32,26 +62,20 @@ export default function WardrobeScreen() {
   };
 
   const handleSave = async () => {
-    if (!selectedImage || !category || !season) {
-      return Alert.alert('Eksik Bilgi', 'Hepsini seç kanka!');
-    }
+    if (!selectedImage || !category || !season) return Alert.alert('Eksik Bilgi', 'Hepsini seç kanka!');
     
     setUploading(true);
-
     try {
       const fileName = `${Date.now()}.jpg`;
-      
       const response = await fetch(selectedImage);
       const blob = await response.blob();
 
-      // Supabase Storage Yükleme
       const { error: storageError } = await supabase.storage
         .from('clothes')
         .upload(fileName, blob, { contentType: 'image/jpeg' });
 
       if (storageError) throw storageError;
 
-      // URL Al ve Database'e Yaz
       const { data: { publicUrl } } = supabase.storage.from('clothes').getPublicUrl(fileName);
 
       const { error: dbError } = await supabase
@@ -60,83 +84,102 @@ export default function WardrobeScreen() {
 
       if (dbError) throw dbError;
 
-      Alert.alert('GarbGenie®', 'Kıyafet başarıyla dolaba eklendi! 🚀');
-      setSelectedImage(null);
-      setCategory(null);
-      setSeason(null);
-
+      Alert.alert('GarbGenie®', 'Kıyafet başarıyla eklendi! 🚀');
+      setShowAddModal(false);
+      setSelectedImage(null); setCategory(null); setSeason(null);
+      fetchClothes();
     } catch (error: any) {
-      Alert.alert('Ağ Hatası', 'Kayıt başarısız: ' + error.message);
+      Alert.alert('Hata', error.message);
     } finally {
       setUploading(false);
     }
   };
 
+  const handleDelete = async (id: string) => {
+    Alert.alert('Sil', 'Bu kıyafeti siliyoruz kanka?', [
+      { text: 'Vazgeç' },
+      { text: 'Sil', style: 'destructive', onPress: async () => {
+        await supabase.from('clothes').delete().eq('id', id);
+        fetchClothes();
+      }}
+    ]);
+  };
+
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        {selectedImage ? (
-          <View style={styles.previewContainer}>
-            <Text style={styles.header}>Yeni Kıyafet Ekle</Text>
-            <View style={styles.imageWrapper}>
-              <Image source={{ uri: selectedImage }} style={styles.imagePreview} />
-            </View>
-            
-            <Text style={styles.label}>Kategori Seç</Text>
-            <View style={styles.chipContainer}>
-              {CATEGORIES.map((item) => (
-                <TouchableOpacity 
-                  key={item} 
-                  style={[styles.chip, category === item && styles.selectedChip]} 
-                  onPress={() => setCategory(item)}
-                >
-                  <Text style={[styles.chipText, category === item && styles.selectedChipText]}>{item}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+      <View style={styles.header}><Text style={styles.headerTitle}>Gardırobum</Text></View>
 
-            <Text style={styles.label}>Mevsim Seç</Text>
-            <View style={styles.chipContainer}>
-              {SEASONS.map((item) => (
-                <TouchableOpacity 
-                  key={item} 
-                  style={[styles.chip, season === item && styles.selectedChip]} 
-                  onPress={() => setSeason(item)}
-                >
-                  <Text style={[styles.chipText, season === item && styles.selectedChipText]}>{item}</Text>
+      {loading && !refreshing ? (
+        <ActivityIndicator size="large" color="#000" style={{ marginTop: 50 }} />
+      ) : (
+        <FlatList
+          data={clothes}
+          numColumns={2}
+          keyExtractor={(item) => item.id}
+          onRefresh={() => { setRefreshing(true); fetchClothes(); }}
+          refreshing={refreshing}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => (
+            <View style={styles.card}>
+              <Image source={{ uri: item.image_url }} style={styles.cardImage} />
+              <View style={styles.cardInfo}>
+                <Text style={styles.cardCategory}>{item.category}</Text>
+                <TouchableOpacity onPress={() => handleDelete(item.id)}>
+                  <Trash2 size={18} color="#ff4444" />
                 </TouchableOpacity>
-              ))}
+              </View>
             </View>
+          )}
+          ListEmptyComponent={<Text style={styles.emptyText}>Dolabın boş kanka, "+" ile ekle!</Text>}
+        />
+      )}
 
-            <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={uploading}>
-              {uploading ? <ActivityIndicator color="#fff" /> : (
-                <View style={styles.buttonContent}>
-                  <Save size={20} color="#fff" />
-                  <Text style={styles.saveButtonText}>Dolaba Kaydet</Text>
+      {/* ARKADAŞININ EKLEME FORMU BURADA (MODAL) */}
+      <Modal visible={showAddModal} animationType="slide" presentationStyle="pageSheet">
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Yeni Kıyafet Ekle</Text>
+            <TouchableOpacity onPress={() => setShowAddModal(false)}><X size={28} color="#000" /></TouchableOpacity>
+          </View>
+          
+          <ScrollView contentContainerStyle={{ padding: 20 }}>
+            <TouchableOpacity style={styles.imagePicker} onPress={() => pickImage(false)}>
+              {selectedImage ? (
+                <Image source={{ uri: selectedImage }} style={styles.fullImage} />
+              ) : (
+                <View style={styles.placeholder}>
+                  <ImageIcon size={40} color="#ccc" />
+                  <Text style={{color: '#aaa', marginTop: 10}}>Fotoğraf Seç</Text>
                 </View>
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={() => setSelectedImage(null)} style={styles.cancelLink}>
-              <Text style={styles.cancelText}>Vazgeç</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.emptyState}>
-            <View style={styles.iconCircle}>
-              <ImageIcon size={40} color="#bbb" />
+            <Text style={styles.label}>Kategori</Text>
+            <View style={styles.chipRow}>
+              {CATEGORIES.map(c => (
+                <TouchableOpacity key={c} style={[styles.chip, category === c && styles.chipSelected]} onPress={() => setCategory(c)}>
+                  <Text style={[styles.chipText, category === c && styles.chipTextSelected]}>{c}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <Text style={styles.emptyText}>Henüz kıyafet eklemedin.</Text>
-            <Text style={styles.subText}>Başlamak için + butonuna bas kanka.</Text>
-          </View>
-        )}
-      </ScrollView>
 
-      <TouchableOpacity style={styles.fab} onPress={() => Alert.alert('Ekle', 'Seç kanka', [
-        {text: 'Fotoğraf Çek', onPress: () => pickImage(true)},
-        {text: 'Galeriden Seç', onPress: () => pickImage(false)},
-        {text: 'İptal', style: 'cancel'}
-      ])}>
+            <Text style={styles.label}>Mevsim</Text>
+            <View style={styles.chipRow}>
+              {SEASONS.map(s => (
+                <TouchableOpacity key={s} style={[styles.chip, season === s && styles.chipSelected]} onPress={() => setSeason(s)}>
+                  <Text style={[styles.chipText, season === s && styles.chipTextSelected]}>{s}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={uploading}>
+              {uploading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Dolaba Kaydet</Text>}
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)}>
         <Plus size={30} color="#fff" />
       </TouchableOpacity>
     </View>
@@ -145,25 +188,28 @@ export default function WardrobeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  scrollContainer: { padding: 20, paddingBottom: 100 },
-  header: { fontSize: 22, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 150 },
-  iconCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  emptyText: { color: '#333', fontSize: 18, fontWeight: 'bold' },
-  subText: { color: '#888', marginTop: 5 },
-  previewContainer: { width: '100%' },
-  imageWrapper: { borderRadius: 20, overflow: 'hidden', elevation: 5, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, marginBottom: 10 },
-  imagePreview: { width: '100%', height: 350, resizeMode: 'cover' },
-  label: { fontSize: 16, fontWeight: 'bold', marginTop: 20, marginBottom: 10 },
-  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  chip: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 25, borderWidth: 1, borderColor: '#eee', backgroundColor: '#f9f9f9' },
-  selectedChip: { backgroundColor: '#000', borderColor: '#000' },
-  chipText: { color: '#666', fontWeight: '500' },
-  selectedChipText: { color: '#fff' },
-  saveButton: { backgroundColor: '#000', padding: 18, borderRadius: 15, marginTop: 35, elevation: 4 },
-  buttonContent: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
-  saveButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  cancelLink: { marginTop: 25, alignSelf: 'center', padding: 10 },
-  cancelText: { color: '#ff4444', fontWeight: 'bold' },
-  fab: { position: 'absolute', right: 25, bottom: 25, backgroundColor: '#000', width: 65, height: 65, borderRadius: 32.5, justifyContent: 'center', alignItems: 'center', elevation: 8 }
+  header: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 20, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  headerTitle: { fontSize: 28, fontWeight: 'bold' },
+  listContent: { padding: 15, paddingBottom: 100 },
+  card: { width: COLUMN_WIDTH, marginBottom: 20, marginRight: 15, borderRadius: 15, backgroundColor: '#fff', elevation: 3, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, overflow: 'hidden' },
+  cardImage: { width: '100%', height: 200 },
+  cardInfo: { padding: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardCategory: { fontSize: 13, fontWeight: 'bold', color: '#444' },
+  emptyText: { textAlign: 'center', marginTop: 100, color: '#999' },
+  fab: { position: 'absolute', bottom: 30, right: 30, backgroundColor: '#000', width: 65, height: 65, borderRadius: 32.5, justifyContent: 'center', alignItems: 'center', elevation: 5 },
+  // Modal Styles
+  modalContainer: { flex: 1, backgroundColor: '#fff' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#eee' },
+  modalTitle: { fontSize: 20, fontWeight: 'bold' },
+  imagePicker: { width: '100%', height: 300, backgroundColor: '#f9f9f9', borderRadius: 20, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 1, borderColor: '#eee' },
+  fullImage: { width: '100%', height: '100%' },
+  placeholder: { alignItems: 'center' },
+  label: { fontSize: 16, fontWeight: 'bold', marginTop: 25, marginBottom: 10 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20, borderWidth: 1, borderColor: '#eee' },
+  chipSelected: { backgroundColor: '#000', borderColor: '#000' },
+  chipText: { color: '#666' },
+  chipTextSelected: { color: '#fff' },
+  saveBtn: { backgroundColor: '#000', padding: 18, borderRadius: 15, marginTop: 40, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });
