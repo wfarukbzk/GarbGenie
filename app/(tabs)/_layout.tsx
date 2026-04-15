@@ -29,8 +29,9 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <User size={24} color={color} />,
         }}
       />
+      {/* Bunu sildik, uyarıyı bu verdiriyor*/}
       {/* Modal'ı navigasyondan gizliyoruz kanka */}
-      <Tabs.Screen name="modal" options={{ href: null }} />
+      {/*<Tabs.Screen name="modal" options={{ href: null }} />*/}
     </Tabs>
   );
 }
