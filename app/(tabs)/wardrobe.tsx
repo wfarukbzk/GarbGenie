@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, FlatList, Modal, Dimensions } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
 import { Plus, Image as ImageIcon, Trash2, Save, X } from 'lucide-react-native';
 // @ts-ignore
 import { supabase } from '../../supabase'; 
@@ -20,6 +22,7 @@ export default function WardrobeScreen() {
 
   // Ekleme Formu State'leri (Arkadaşının kodundan)
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageMimeType, setSelectedImageMimeType] = useState<string | null>(null);
   const [category, setCategory] = useState<string | null>(null);
   const [season, setSeason] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -29,9 +32,17 @@ export default function WardrobeScreen() {
   const fetchClothes = async () => {
     try {
       setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        setClothes([]);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('clothes')
         .select('*')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -58,6 +69,7 @@ export default function WardrobeScreen() {
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
       setSelectedImage(result.assets[0].uri);
+      setSelectedImageMimeType(result.assets[0].mimeType ?? 'image/jpeg');
     }
   };
 
@@ -66,30 +78,52 @@ export default function WardrobeScreen() {
     
     setUploading(true);
     try {
-      const fileName = `${Date.now()}.jpg`;
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error('Kiyafet eklemek icin once giris yapman gerekiyor.');
+      }
+
+      const mimeType = selectedImageMimeType ?? 'image/jpeg';
+      const fileExt =
+        mimeType === 'image/png'
+          ? 'png'
+          : mimeType === 'image/webp'
+            ? 'webp'
+            : 'jpg';
+      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+      const base64 = await FileSystem.readAsStringAsync(selectedImage, {
+        encoding: 'base64' as any,
+      });
+      const fileData = decode(base64);
 
       const { error: storageError } = await supabase.storage
         .from('clothes')
-        .upload(fileName, blob, { contentType: 'image/jpeg' });
+        .upload(fileName, fileData, {
+          contentType: mimeType,
+          upsert: false,
+        });
 
-      if (storageError) throw storageError;
+      if (storageError) {
+        throw new Error(`Storage hatasi: ${storageError.message}`);
+      }
 
       const { data: { publicUrl } } = supabase.storage.from('clothes').getPublicUrl(fileName);
 
       const { error: dbError } = await supabase
         .from('clothes')
-        .insert([{ image_url: publicUrl, category, season }]);
+        .insert([{ user_id: user.id, image_url: publicUrl, category, season }]);
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        throw new Error(`Veritabani hatasi: ${dbError.message}`);
+      }
 
       Alert.alert('GarbGenie®', 'Kıyafet başarıyla eklendi! 🚀');
       setShowAddModal(false);
-      setSelectedImage(null); setCategory(null); setSeason(null);
+      setSelectedImage(null); setSelectedImageMimeType(null); setCategory(null); setSeason(null);
       fetchClothes();
     } catch (error: any) {
-      Alert.alert('Hata', error.message);
+      Alert.alert('Hata', error?.message || 'Beklenmeyen bir yukleme hatasi olustu.');
     } finally {
       setUploading(false);
     }
@@ -99,7 +133,14 @@ export default function WardrobeScreen() {
     Alert.alert('Sil', 'Bu kıyafeti siliyoruz kanka?', [
       { text: 'Vazgeç' },
       { text: 'Sil', style: 'destructive', onPress: async () => {
-        await supabase.from('clothes').delete().eq('id', id);
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (!user) {
+          Alert.alert('Hata', 'Silme islemi icin yeniden giris yapman gerekiyor.');
+          return;
+        }
+
+        await supabase.from('clothes').delete().eq('id', id).eq('user_id', user.id);
         fetchClothes();
       }}
     ]);
