@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, Modal, Dimensions, ImageBackground } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, interpolate } from 'react-native-reanimated';
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -35,8 +34,6 @@ export default function WardrobeScreen() {
 
   const [closetStep, setClosetStep] = useState<0 | 1 | 2>(0);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-
-  // KANKA: Tam Ekran Resim Gösterme State'i
   const [selectedImageForView, setSelectedImageForView] = useState<string | null>(null);
 
   const doorOpenValue = useSharedValue(0);
@@ -52,6 +49,39 @@ export default function WardrobeScreen() {
   }, []);
 
   useEffect(() => { fetchClothes(); }, [fetchClothes]);
+
+  // --- ARKA PLAN SİLME FONKSİYONU (.env'den çeker) ---
+  const removeBackground = async (imageUri: string) => {
+    try {
+      const apiKey = process.env.EXPO_PUBLIC_REMOVE_BG_API_KEY;
+      if (!apiKey) throw new Error("API Key bulunamadı kanka.");
+
+      const formData = new FormData();
+      formData.append('image_file', {
+        uri: imageUri,
+        type: 'image/jpeg',
+        name: 'kombin.jpg',
+      } as any);
+      formData.append('size', 'auto');
+
+      const response = await fetch('https://api.remove.bg/v1.0/removebg', {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': apiKey,
+          'Accept': 'application/json',
+        },
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('Yapay Zeka arka planı silemedi.');
+
+      const data = await response.json();
+      return data.data.result_b64;
+    } catch (error) {
+      console.error("RemoveBG Hatası:", error);
+      throw error;
+    }
+  };
 
   const openCloset = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -80,27 +110,40 @@ export default function WardrobeScreen() {
   };
 
   const handleSaveModal = async () => {
-    if (!selectedImage || !category || !season) return;
+    if (!selectedImage || !category || !season) return Alert.alert('Eksik', 'Tüm alanları doldur kanka.');
+    
     setUploading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) throw new Error("Oturum açman lazım.");
       
-      const b64 = await FileSystem.readAsStringAsync(selectedImage, { encoding: 'base64' as any });
-      const fileName = `${user.id}/${Date.now()}.jpg`;
+      const transparentBase64 = await removeBackground(selectedImage);
+      const fileName = `${user.id}/${Date.now()}_ai_cleaned.png`;
+      const fileData = decode(transparentBase64);
       
-      await supabase.storage.from('clothes').upload(fileName, decode(b64), { contentType: 'image/jpeg' });
+      const { error: storageError } = await supabase.storage
+        .from('clothes')
+        .upload(fileName, fileData, { contentType: 'image/png' });
+
+      if (storageError) throw storageError;
+
       const { data: { publicUrl } } = supabase.storage.from('clothes').getPublicUrl(fileName);
       
-      await supabase.from('clothes').insert([{ user_id: user.id, image_url: publicUrl, category, season }]);
+      const { error: dbError } = await supabase
+        .from('clothes')
+        .insert([{ user_id: user.id, image_url: publicUrl, category, season }]);
       
+      if (dbError) throw dbError;
+      
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setShowAddModal(false); 
       setSelectedImage(null); 
       setCategory(null);
       setSeason(null);
       fetchClothes();
-    } catch (e) { 
-      console.error(e); 
+      Alert.alert('GarbGenie Vision 👁️', 'Yapay zeka arka planı temizledi ve dolabına astı!');
+    } catch (e: any) { 
+      Alert.alert('Hata', e.message);
     } finally { 
       setUploading(false); 
     }
@@ -118,7 +161,6 @@ export default function WardrobeScreen() {
         <View style={styles.clothesGrid}>
           {seasonClothes.map(item => (
             <View key={item.id} style={styles.itemCard}>
-              {/* KANKA: Resme tıklama özelliği ekledik */}
               <TouchableOpacity onPress={() => setSelectedImageForView(item.image_url)} activeOpacity={0.9}>
                   <Image source={{ uri: item.image_url }} style={styles.itemImg} resizeMode="cover" />
               </TouchableOpacity>
@@ -142,9 +184,8 @@ export default function WardrobeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* --- ÜST KISIM: PREMIUM AVATAR AREA --- */}
+      {/* ÜST KISIM */}
       <LinearGradient colors={['#1a1a2e', '#16213e', '#0f3460']} style={styles.avatarArea}>
-        <View style={styles.avatarAura} />
         <View style={styles.avatarCircle}>
           <Image source={{ uri: 'https://api.dicebear.com/7.x/avataaars/png?seed=Faruk&backgroundColor=transparent' }} style={styles.avatarImg} />
         </View>
@@ -153,7 +194,7 @@ export default function WardrobeScreen() {
         </LinearGradient>
       </LinearGradient>
 
-      {/* --- ALT KISIM: MODERNIZE DOLAP --- */}
+      {/* ALT KISIM */}
       <View style={styles.closetContainer}>
         <View style={styles.closetInterior}>
           {closetStep === 1 && (
@@ -225,13 +266,11 @@ export default function WardrobeScreen() {
         </LinearGradient>
       </TouchableOpacity>
 
-      {/* --- KANKA: RESİM TAM EKRAN GÖSTERME MODALI --- */}
-      <Modal visible={!!selectedImageForView} transparent={true} animationType="fade" onRequestClose={() => setSelectedImageForView(null)}>
-        <TouchableOpacity style={styles.fullViewOverlay} activeOpacity={1} onPress={() => setSelectedImageForView(null)} // Click outside to close
-        >
+      {/* FULL VIEW MODAL */}
+      <Modal visible={!!selectedImageForView} transparent={true} animationType="fade">
+        <TouchableOpacity style={styles.fullViewOverlay} activeOpacity={1} onPress={() => setSelectedImageForView(null)}>
           <View style={styles.fullViewContainer}>
-            <Image source={{ uri: selectedImageForView ?? '' }} style={styles.fullViewImage} resizeMode="contain" // Show the WHOLE image, no crop
-            />
+            <Image source={{ uri: selectedImageForView ?? '' }} style={styles.fullViewImage} resizeMode="contain" />
             <TouchableOpacity style={styles.closeFullViewBtn} onPress={() => setSelectedImageForView(null)}>
               <X size={30} color="#fff" />
             </TouchableOpacity>
@@ -268,7 +307,7 @@ export default function WardrobeScreen() {
                 </View>
                 <TouchableOpacity style={styles.saveBtn} onPress={handleSaveModal} disabled={uploading}>
                     <LinearGradient colors={['#000', '#333']} style={styles.saveBtnGradient}>
-                        {uploading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Dolaba Kaydet</Text>}
+                        {uploading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Yapay Zeka ile Temizle & Kaydet</Text>}
                     </LinearGradient>
                 </TouchableOpacity>
               </ScrollView>
@@ -281,12 +320,10 @@ export default function WardrobeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   avatarArea: { height: SCREEN_HEIGHT * 0.35, justifyContent: 'center', alignItems: 'center', paddingTop: 40 },
-  avatarAura: { position: 'absolute', width: 250, height: 250, borderRadius: 125, backgroundColor: 'rgba(79, 172, 254, 0.15)' },
   avatarCircle: { width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 2, borderColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
   avatarImg: { width: '90%', height: '90%' },
   namePlate: { marginTop: 15, paddingHorizontal: 35, paddingVertical: 10, borderRadius: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   avatarName: { color: '#fff', fontSize: 20, fontWeight: '900', letterSpacing: 4 },
-
   closetContainer: { flex: 1, position: 'relative', overflow: 'hidden' },
   door: { position: 'absolute', width: '50%', height: '100%', zIndex: 10 },
   leftDoor: { left: 0 },
@@ -295,18 +332,15 @@ const styles = StyleSheet.create({
   doorGradient: { flex: 1, borderWidth: 0.5, borderColor: '#34495e' },
   handleStrip: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 4, backgroundColor: 'rgba(255,255,255,0.05)' },
   doorKnob: { position: 'absolute', right: 10, top: '45%', width: 8, height: 100, backgroundColor: '#bdc3c7', borderRadius: 4, borderWidth: 1, borderColor: '#7f8c8d' },
-
   closetInterior: { flex: 1, backgroundColor: '#0a0a0a', padding: 20 },
   interiorContent: { flex: 1 },
   interiorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
   interiorHeaderText: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
-  
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 15 },
   categoryCard: { width: '47%', aspectRatio: 0.9 },
   catImage: { flex: 1 },
   catOverlay: { flex: 1, justifyContent: 'flex-end', padding: 15, borderRadius: 20 },
   catLabel: { color: '#fff', fontSize: 16, fontWeight: 'bold', marginTop: 8 },
-
   backButton: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 25 },
   backButtonText: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
   seasonSection: { marginBottom: 30 },
@@ -316,20 +350,14 @@ const styles = StyleSheet.create({
   itemCard: { width: COLUMN_WIDTH, height: 200, borderRadius: 20, overflow: 'hidden', backgroundColor: '#1a1a1a', position: 'relative' },
   itemImg: { width: '100%', height: '100%' },
   deleteBtn: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(255,0,0,0.7)', padding: 8, borderRadius: 12 },
-  
   emptyWrap: { alignItems: 'center', marginTop: 100 },
   emptyText: { color: 'rgba(255,255,255,0.3)', marginTop: 15, fontSize: 16 },
-
   fab: { position: 'absolute', bottom: 30, right: 30, width: 65, height: 65, borderRadius: 32.5, elevation: 10, zIndex: 100 },
   fabGradient: { flex: 1, borderRadius: 32.5, justifyContent: 'center', alignItems: 'center' },
-
-  // KANKA: Full View Styles
-  fullViewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', // Dark background to focus
-    justifyContent: 'center', alignItems: 'center' },
+  fullViewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   fullViewContainer: { width: width * 0.9, height: SCREEN_HEIGHT * 0.8, justifyContent: 'center', alignItems: 'center' },
   fullViewImage: { width: '100%', height: '100%' },
   closeFullViewBtn: { position: 'absolute', top: -40, right: 0, backgroundColor: 'rgba(255,255,255,0.2)', padding: 8, borderRadius: 25 },
-
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 25, alignItems: 'center' },
   modalTitle: { fontSize: 22, fontWeight: 'bold' },
