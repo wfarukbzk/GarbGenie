@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
+import { useRouter } from 'expo-router';
 import { CalendarDays, Shirt, Sparkles, Star, TrendingUp, Wind, X } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -14,12 +15,14 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
+import { useAuth } from '../../context/AuthContext';
 
 // @ts-ignore
-import { supabase } from '../../supabase';
+import { suggestOutfit, type OutfitCombinationKey } from '@/lib/gemini-outfit';
 import { fetchCurrentWeatherByCoords, type CurrentWeather } from '@/lib/weather';
+import { supabase } from '../../supabase';
 
 type WeatherUiState =
   | { status: 'idle' | 'loading' }
@@ -37,6 +40,7 @@ type ClothingItem = {
 type SuggestedOutfit = {
   top: ClothingItem;
   bottom: ClothingItem;
+  reason?: string;
 };
 
 type SavedOutfit = SuggestedOutfit & {
@@ -185,6 +189,8 @@ function OutfitCarousel() {
 }
 
 export default function HomeScreen() {
+  const router = useRouter();
+  const { user } = useAuth();
   const [weatherState, setWeatherState] = useState<WeatherUiState>({ status: 'idle' });
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [suggestedOutfit, setSuggestedOutfit] = useState<SuggestedOutfit | null>(null);
@@ -196,6 +202,8 @@ export default function HomeScreen() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [selectedCalendarDateKey, setSelectedCalendarDateKey] = useState(() => formatDateKey(new Date()));
   const [dbStats, setDbStats] = useState({ clothes: 0, outfits: 0 });
+  const [recentCombinations, setRecentCombinations] = useState<OutfitCombinationKey[]>([]);
+  const [showProfileReminderModal, setShowProfileReminderModal] = useState(false);
 
   const isMountedRef = useRef(true);
 
@@ -209,26 +217,50 @@ export default function HomeScreen() {
     if (isMountedRef.current) setWeatherState(next);
   }, []);
 
+  const checkProfileCompletion = useCallback((currentUser: any) => {
+    const age = currentUser?.user_metadata?.age;
+    const gender = currentUser?.user_metadata?.gender;
+    const profession = currentUser?.user_metadata?.profession;
+    return Boolean(age && gender && profession);
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setShowProfileReminderModal(false);
+      return;
+    }
+
+    const completed = checkProfileCompletion(user);
+    setShowProfileReminderModal(!completed);
+  }, [user, checkProfileCompletion]);
+
+  const getSavedOutfitsKey = useCallback(() => {
+    return user ? `${SAVED_OUTFITS_KEY}:${user.id}` : SAVED_OUTFITS_KEY;
+  }, [user]);
+
   const loadSavedOutfits = useCallback(async () => {
+    if (!user) {
+      setSavedOutfits([]);
+      return;
+    }
+
     try {
-      const stored = await AsyncStorage.getItem(SAVED_OUTFITS_KEY);
+      const stored = await AsyncStorage.getItem(getSavedOutfitsKey());
       const parsed = stored ? (JSON.parse(stored) as SavedOutfit[]) : [];
       setSavedOutfits(Array.isArray(parsed) ? parsed : []);
     } catch (error) {
       console.log('Kayitli kombinler okunamadi:', error);
       setSavedOutfits([]);
     }
-  }, []);
+  }, [getSavedOutfitsKey, user]);
 
   const fetchStats = useCallback(async () => {
+    if (!user) {
+      setDbStats({ clothes: 0, outfits: 0 });
+      return;
+    }
+
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) return;
-
       const { count, error } = await supabase.from('clothes').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
 
       if (!error) {
@@ -239,8 +271,9 @@ export default function HomeScreen() {
       }
     } catch (error) {
       console.log('Istatistikler alinamadi:', error);
+      setDbStats({ clothes: 0, outfits: savedOutfits.length });
     }
-  }, [savedOutfits.length]);
+  }, [savedOutfits.length, user]);
 
   const loadWeather = useCallback(async () => {
     safeSet({ status: 'loading' });
@@ -267,13 +300,29 @@ export default function HomeScreen() {
   }, [loadSavedOutfits, loadWeather, safeSet]);
 
   useEffect(() => {
+    if (!user) {
+      setSavedOutfits([]);
+      setDbStats({ clothes: 0, outfits: 0 });
+      return;
+    }
+
+    loadSavedOutfits();
     fetchStats();
-  }, [fetchStats]);
+  }, [user, loadSavedOutfits, fetchStats]);
 
   const generateSuggestion = async () => {
     setIsSuggesting(true);
     try {
-      const { data: clothes, error } = await supabase.from('clothes').select('*');
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError || !user) {
+        Alert.alert('Oturum', 'Kombin olusturmak icin giris yapman lazim kanka.');
+        return;
+      }
+
+      const { data: clothes, error } = await supabase.from('clothes').select('*').eq('user_id', user.id);
       if (error) throw error;
 
       if (!clothes || clothes.length < 2) {
@@ -281,23 +330,51 @@ export default function HomeScreen() {
         return;
       }
 
-      const currentTemp = weatherState.status === 'ready' ? weatherState.weather.tempC : 22;
-      const targetSeasons = currentTemp < 18 ? ['Bahar', 'KÄ±ÅŸlÄ±k', 'Kislik'] : ['Bahar', 'YazlÄ±k', 'Yazlik'];
-
-      const tops = clothes.filter((item: ClothingItem) => ['Ãœst Giyim', 'Üst Giyim', 'Ust Giyim'].includes(item.category) && targetSeasons.includes(item.season));
-      const bottoms = clothes.filter((item: ClothingItem) => item.category === 'Alt Giyim' && targetSeasons.includes(item.season));
+      const tops = clothes.filter((item: ClothingItem) => ['Üst Giyim', 'Dış Giyim'].includes(item.category));
+      const bottoms = clothes.filter((item: ClothingItem) => item.category === 'Alt Giyim');
 
       if (tops.length === 0 || bottoms.length === 0) {
-        Alert.alert('Uygun Kiyafet Yok', 'Bu havaya uygun kombin bulamadim, biraz daha kiyafet ekle kanka!');
+        Alert.alert('Eksik Parca', 'Dolabinda en az bir ust (veya dis giyim) ve bir alt giyim olmali kanka!');
         return;
       }
 
-      const randomTop = tops[Math.floor(Math.random() * tops.length)];
-      const randomBottom = bottoms[Math.floor(Math.random() * bottoms.length)];
-      setSuggestedOutfit({ top: randomTop, bottom: randomBottom });
+      const weather: CurrentWeather =
+        weatherState.status === 'ready'
+          ? weatherState.weather
+          : { tempC: 20, description: 'bilinmiyor', city: undefined };
+
+      const suggestion = await suggestOutfit({
+        clothes: clothes.map((item: ClothingItem) => ({
+          id: item.id,
+          category: item.category,
+          season: item.season,
+        })),
+        weather,
+        excludeCombinations: recentCombinations,
+      });
+
+      const top = clothes.find((item: ClothingItem) => item.id === suggestion.topId);
+      const bottom = clothes.find((item: ClothingItem) => item.id === suggestion.bottomId);
+
+      if (!top || !bottom) {
+        Alert.alert('Hata', 'Gemini kombin secimi gecersiz geldi, tekrar dene kanka.');
+        return;
+      }
+
+      setRecentCombinations((prev) => {
+        const next = [
+          { topId: suggestion.topId, bottomId: suggestion.bottomId },
+          ...prev.filter(
+            (combo) => !(combo.topId === suggestion.topId && combo.bottomId === suggestion.bottomId)
+          ),
+        ];
+        return next.slice(0, 10);
+      });
+      setSuggestedOutfit({ top, bottom, reason: suggestion.reason });
       setShowResultModal(true);
     } catch (error) {
-      Alert.alert('Hata', 'Kombin olusturulamadi kanka.');
+      const message = error instanceof Error ? error.message : 'Kombin olusturulamadi kanka.';
+      Alert.alert('Hata', message);
     } finally {
       setIsSuggesting(false);
     }
@@ -305,6 +382,10 @@ export default function HomeScreen() {
 
   const saveLikedOutfit = useCallback(async () => {
     if (!suggestedOutfit) return;
+    if (!user) {
+      Alert.alert('Oturum', 'Kombini kaydetmek icin giris yapman lazim kanka.');
+      return;
+    }
 
     const nextOutfits: SavedOutfit[] = [
       {
@@ -318,7 +399,7 @@ export default function HomeScreen() {
     ];
 
     try {
-      await AsyncStorage.setItem(SAVED_OUTFITS_KEY, JSON.stringify(nextOutfits));
+      await AsyncStorage.setItem(getSavedOutfitsKey(), JSON.stringify(nextOutfits));
       setSavedOutfits(nextOutfits);
       setShowResultModal(false);
       setSelectedWeekDay(getTodayIndex());
@@ -328,7 +409,7 @@ export default function HomeScreen() {
     } catch (error) {
       Alert.alert('Hata', 'Kombin kaydedilemedi.');
     }
-  }, [savedOutfits, suggestedOutfit]);
+  }, [getSavedOutfitsKey, savedOutfits, suggestedOutfit, user]);
 
   const openDayOutfits = useCallback((dayIndex: number) => {
     setSelectedWeekDay(dayIndex);
@@ -384,6 +465,25 @@ export default function HomeScreen() {
 
       <Text style={styles.heroText}>GarbGenie Sizin Icin Hazir!</Text>
 
+      <Modal visible={showProfileReminderModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.reminderBox}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Profilini tamamla</Text>
+              <TouchableOpacity onPress={() => setShowProfileReminderModal(false)}>
+                <X size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.reminderText}>
+              Dolabını daha iyi anlamam için yaş, cinsiyet ve meslek bilgilerini profil sayfanda tamamla.
+            </Text>
+            <TouchableOpacity style={styles.reminderButton} onPress={() => router.push('/profile')}>
+              <Text style={styles.reminderButtonText}>Profil sayfasına git</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <TouchableOpacity style={styles.mainButton} onPress={generateSuggestion} disabled={isSuggesting}>
         {isSuggesting ? (
           <ActivityIndicator color="#fff" />
@@ -408,12 +508,16 @@ export default function HomeScreen() {
                 <X size={26} color="#000" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.suggestionDesc}>Bu havada harika goruneceksin kanka:</Text>
+            <Text style={styles.suggestionDesc}>
+              {suggestedOutfit?.reason ?? 'Bu havada harika goruneceksin kanka:'}
+            </Text>
 
             <View style={styles.outfitPair}>
               <View style={styles.suggestedCard}>
                 <Image source={{ uri: suggestedOutfit?.top.image_url }} style={styles.suggestedImg} />
-                <Text style={styles.suggestedLabel}>Ust Giyim</Text>
+                <Text style={styles.suggestedLabel}>
+                  {suggestedOutfit?.top.category === 'Dış Giyim' ? 'Dis Giyim' : 'Ust Giyim'}
+                </Text>
               </View>
               <View style={styles.suggestedCard}>
                 <Image source={{ uri: suggestedOutfit?.bottom.image_url }} style={styles.suggestedImg} />
@@ -622,4 +726,8 @@ const styles = StyleSheet.create({
   emptyDayText: { fontSize: 14, color: '#666', textAlign: 'center', paddingVertical: 24 },
   savedOutfitCard: { padding: 16, borderRadius: 18, backgroundColor: '#f8f8f8', marginBottom: 14 },
   savedOutfitTitle: { fontSize: 14, fontWeight: '800', color: '#111', marginBottom: 12 },
+  reminderBox: { width: '90%', backgroundColor: '#fff', borderRadius: 24, padding: 22, alignItems: 'center' },
+  reminderText: { fontSize: 14, color: '#444', lineHeight: 20, marginBottom: 22 },
+  reminderButton: { backgroundColor: '#000', borderRadius: 20, paddingVertical: 14, paddingHorizontal: 22 },
+  reminderButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

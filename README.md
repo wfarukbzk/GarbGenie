@@ -12,6 +12,8 @@ npm install
 
 Hava durumu (OpenWeather): `.env` dosyasına `EXPO_PUBLIC_OPENWEATHER_API_KEY` ekleyin.
 
+Kombin önerisi (Gemini): `.env` dosyasına `EXPO_PUBLIC_GEMINI_API_KEY` ekleyin. [Google AI Studio](https://aistudio.google.com/apikey) üzerinden ücretsiz API anahtarı alabilirsiniz.
+
 Uygulamayı başlatın:
 
 npx expo start

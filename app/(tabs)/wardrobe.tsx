@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Image, Alert, ScrollView, ActivityIndicator, Modal, Dimensions, ImageBackground } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withSpring, interpolate } from 'react-native-reanimated';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { decode } from 'base64-arraybuffer';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { decode } from 'base64-arraybuffer';
-import { Plus, Image as ImageIcon, Trash2, X, ArrowLeft, Shirt, ShoppingBag, Footprints, Layers } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ArrowLeft, Footprints, Image as ImageIcon, Layers, Plus, Shirt, ShoppingBag, Sparkles, Trash2, X } from 'lucide-react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Dimensions, Image, ImageBackground, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Animated, { interpolate, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 // @ts-ignore
 import { supabase } from '../../supabase';
 
+const genAI = new GoogleGenerativeAI(process.env.EXPO_PUBLIC_GEMINI_API_KEY || "");
 const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const COLUMN_WIDTH = width / 2 - 25;
 
@@ -19,17 +20,14 @@ const CATEGORY_DATA = [
   { id: 'Alt Giyim', label: 'Alt Giyim', icon: <Layers size={28} color="#fff" />, img: 'https://images.unsplash.com/photo-1542272604-787c3835535d?w=400' },
   { id: 'Ayakkabı', label: 'Ayakkabı', icon: <Footprints size={28} color="#fff" />, img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400' },
   { id: 'Dış Giyim', label: 'Dış Giyim', icon: <ShoppingBag size={28} color="#fff" />, img: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=400' },
+  { id: 'Takı & Aksesuar', label: 'Takı & Aksesuar', icon: <Sparkles size={28} color="#fff" />, img: 'https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=400' },
 ];
-
-const SEASONS = ['Bahar', 'Yazlık', 'Kışlık'];
 
 export default function WardrobeScreen() {
   const [clothes, setClothes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [category, setCategory] = useState<string | null>(null);
-  const [season, setSeason] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const [closetStep, setClosetStep] = useState<0 | 1 | 2>(0);
@@ -50,26 +48,18 @@ export default function WardrobeScreen() {
 
   useEffect(() => { fetchClothes(); }, [fetchClothes]);
 
-  // --- ARKA PLAN SİLME FONKSİYONU (.env'den çeker) ---
   const removeBackground = async (imageUri: string) => {
     try {
       const apiKey = process.env.EXPO_PUBLIC_REMOVE_BG_API_KEY;
       if (!apiKey) throw new Error("API Key bulunamadı kanka.");
 
       const formData = new FormData();
-      formData.append('image_file', {
-        uri: imageUri,
-        type: 'image/jpeg',
-        name: 'kombin.jpg',
-      } as any);
+      formData.append('image_file', { uri: imageUri, type: 'image/jpeg', name: 'kombin.jpg' } as any);
       formData.append('size', 'auto');
 
       const response = await fetch('https://api.remove.bg/v1.0/removebg', {
         method: 'POST',
-        headers: {
-          'X-Api-Key': apiKey,
-          'Accept': 'application/json',
-        },
+        headers: { 'X-Api-Key': apiKey, 'Accept': 'application/json' },
         body: formData,
       });
 
@@ -83,6 +73,41 @@ export default function WardrobeScreen() {
     }
   };
 
+  // --- GARANTİLİ SAF JSON VEREN AI ANALİZ FONKSİYONU ---
+  const analyzeImageWithAI = async (base64Image: string) => {
+    try {
+      // KANKA BAKIŞI: Burada responseMimeType ekleyerek Gemini'ı sadece saf JSON dönmeye zorluyoruz.
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-3.5-flash",
+        generationConfig: { responseMimeType: "application/json" }
+      });
+      
+      const prompt = `Analyze this clothing or accessory image and output a valid JSON object matching this schema exactly:
+      {
+        "category": "Must be exactly one of: 'Üst Giyim', 'Alt Giyim', 'Ayakkabı', 'Dış Giyim', 'Takı & Aksesuar'",
+        "season": "Must be exactly one of: 'Bahar', 'Yazlık', 'Kışlık'",
+        "sub_category": "The specific type of clothing in Turkish (e.g., Tişört, Kot Pantolon, Sneaker, Kolye, Güneş Gözlüğü)",
+        "color": "The dominant color in Turkish (e.g., Siyah, Beyaz, Kırmızı, Mavi, Altın)",
+        "style_tag": "The fashion style in Turkish (e.g., Spor, Casual, Şık, Minimalist)"
+      }
+      Do not include any markdown formatting, code blocks, or extra text. Output ONLY the raw JSON string.`;
+  
+      const result = await model.generateContent([
+        prompt,
+        { inlineData: { data: base64Image, mimeType: "image/png" } }
+      ]);
+  
+      const text = result.response.text();
+      console.log("Gemini Temiz Çıktı kanka:", text); // Test ederken terminalden doğruluğuna bakarsın
+      
+      return JSON.parse(text.trim());
+    } catch (error) {
+      console.error("AI Analiz Döngü Hatası:", error);
+      // Eğer yine de bir hata olursa en azından patlamasın ama hatayı terminale bassın
+      throw new Error("Yapay zeka görseli okurken bir hata oluştu kanka, tekrar dene.");
+    }
+  };
+
   const openCloset = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     doorOpenValue.value = withSpring(1, { damping: 15, stiffness: 100 });
@@ -90,7 +115,7 @@ export default function WardrobeScreen() {
   };
 
   const closeCloset = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setClosetStep(0);
     doorOpenValue.value = withSpring(0, { damping: 15, stiffness: 100 });
   };
@@ -110,14 +135,20 @@ export default function WardrobeScreen() {
   };
 
   const handleSaveModal = async () => {
-    if (!selectedImage || !category || !season) return Alert.alert('Eksik', 'Tüm alanları doldur kanka.');
+    if (!selectedImage) return Alert.alert('Eksik', 'Lütfen bir fotoğraf seç kanka.');
     
     setUploading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Oturum açman lazım.");
       
+      // 1. Arka Planı Sil
       const transparentBase64 = await removeBackground(selectedImage);
+      
+      // 2. Akıllı Yapay Zeka Analizi
+      const aiAnalysis = await analyzeImageWithAI(transparentBase64);
+      
+      // 3. Dosya İsmi Belirle ve Supabase Storage'a Yükle
       const fileName = `${user.id}/${Date.now()}_ai_cleaned.png`;
       const fileData = decode(transparentBase64);
       
@@ -129,21 +160,27 @@ export default function WardrobeScreen() {
 
       const { data: { publicUrl } } = supabase.storage.from('clothes').getPublicUrl(fileName);
       
-      const { error: dbError } = await supabase
-        .from('clothes')
-        .insert([{ user_id: user.id, image_url: publicUrl, category, season }]);
-      
+      // 4. Veritabanına Ekleme
+      const insertData: any = { 
+        user_id: user.id, 
+        image_url: publicUrl, 
+        category: aiAnalysis.category, 
+        season: aiAnalysis.season,     
+        sub_category: aiAnalysis.sub_category,
+        color: aiAnalysis.color,
+        style_tag: aiAnalysis.style_tag
+      };
+
+      const { error: dbError } = await supabase.from('clothes').insert([insertData]);
       if (dbError) throw dbError;
       
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setShowAddModal(false); 
       setSelectedImage(null); 
-      setCategory(null);
-      setSeason(null);
       fetchClothes();
-      Alert.alert('GarbGenie Vision 👁️', 'Yapay zeka arka planı temizledi ve dolabına astı!');
+      Alert.alert('GarbGenie Vision 👁️', `${aiAnalysis.color} renkli ${aiAnalysis.sub_category} başarıyla ${aiAnalysis.category} dolabına eklendi!`);
     } catch (e: any) { 
-      Alert.alert('Hata', e.message);
+      Alert.alert('Analiz Hatası', e.message);
     } finally { 
       setUploading(false); 
     }
@@ -229,11 +266,11 @@ export default function WardrobeScreen() {
                 <Text style={styles.backButtonText}>{selectedCategory}</Text>
               </TouchableOpacity>
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{paddingBottom: 100}}>
-                {SEASONS.map(s => renderSeasonGroup(s))}
+                {['Bahar', 'Yazlık', 'Kışlık'].map(s => renderSeasonGroup(s))}
                 {clothes.filter(c => c.category === selectedCategory).length === 0 && (
                    <View style={styles.emptyWrap}>
                        <Shirt size={48} color="rgba(255,255,255,0.1)" />
-                       <Text style={styles.emptyText}>Henüz bir şey eklemedin kanka.</Text>
+                       <Text style={styles.emptyText}>Henüz bu kategoride eşya yok kanka.</Text>
                    </View>
                 )}
               </ScrollView>
@@ -278,36 +315,25 @@ export default function WardrobeScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* EKLEME MODALI */}
+      {/* SIFIR TIKLAMA MODALI */}
       <Modal visible={showAddModal} animationType="slide">
           <View style={styles.modalContainer}>
               <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Yeni Kıyafet Ekle</Text>
+                  <Text style={styles.modalTitle}>Akıllı Dolap</Text>
                   <TouchableOpacity onPress={() => setShowAddModal(false)}><X size={28} color="#000" /></TouchableOpacity>
               </View>
               <ScrollView style={{padding: 20}}>
+                <Text style={{color: '#666', marginBottom: 15, fontSize: 16}}>
+                  Kanka sadece fotoğrafı seç, gerisini yapay zeka halledecek! ✨
+                </Text>
+
                 <TouchableOpacity style={styles.imagePicker} onPress={handlePickImage}>
                     {selectedImage ? <Image source={{uri: selectedImage}} style={{flex:1, borderRadius: 15}} /> : <ImageIcon size={50} color="#ccc" />}
                 </TouchableOpacity>
-                <Text style={styles.label}>Kategori</Text>
-                <View style={styles.chipRow}>
-                    {CATEGORY_DATA.map(c => (
-                        <TouchableOpacity key={c.id} style={[styles.chip, category === c.id && styles.chipActive]} onPress={() => setCategory(c.id)}>
-                            <Text style={[styles.chipText, category === c.id && {color: '#fff'}]}>{c.label}</Text>
-                        </TouchableOpacity>
-                    ))}
-                </View>
-                <Text style={styles.label}>Mevsim</Text>
-                <View style={styles.chipRow}>
-                    {SEASONS.map(s => (
-                        <TouchableOpacity key={s} style={[styles.chip, season === s && styles.chipActive]} onPress={() => setSeason(s)}>
-                            <Text style={[styles.chipText, season === s && {color: '#fff'}]}>{s}</Text>
-                        </TouchableOpacity>
-                    ))}
-                </View>
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveModal} disabled={uploading}>
-                    <LinearGradient colors={['#000', '#333']} style={styles.saveBtnGradient}>
-                        {uploading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Yapay Zeka ile Temizle & Kaydet</Text>}
+                
+                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveModal} disabled={uploading || !selectedImage}>
+                    <LinearGradient colors={selectedImage ? ['#000', '#333'] : ['#ccc', '#aaa']} style={styles.saveBtnGradient}>
+                        {uploading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Sihri Başlat & Kaydet</Text>}
                     </LinearGradient>
                 </TouchableOpacity>
               </ScrollView>
@@ -361,13 +387,8 @@ const styles = StyleSheet.create({
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 25, alignItems: 'center' },
   modalTitle: { fontSize: 22, fontWeight: 'bold' },
-  imagePicker: { width: '100%', height: 350, backgroundColor: '#f0f2f5', borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-  label: { fontSize: 16, fontWeight: 'bold', marginVertical: 15 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  chip: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 15, borderWidth: 1, borderColor: '#ddd' },
-  chipActive: { backgroundColor: '#000', borderColor: '#000' },
-  chipText: { color: '#666', fontWeight: 'bold' },
-  saveBtn: { marginTop: 40, height: 60, borderRadius: 15, overflow: 'hidden' },
+  imagePicker: { width: '100%', height: 400, backgroundColor: '#f0f2f5', borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+  saveBtn: { marginTop: 20, height: 60, borderRadius: 15, overflow: 'hidden' },
   saveBtnGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   saveBtnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }
 });
