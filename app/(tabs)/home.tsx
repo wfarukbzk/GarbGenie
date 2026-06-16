@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import { CalendarDays, Shirt, Sparkles, Star, TrendingUp, Wind, X } from 'lucide-react-native';
+import { CalendarDays, Shirt, Sparkles, Star, TrendingUp, Wind, X, RefreshCw } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -205,6 +205,10 @@ export default function HomeScreen() {
   const [recentCombinations, setRecentCombinations] = useState<OutfitCombinationKey[]>([]);
   const [showProfileReminderModal, setShowProfileReminderModal] = useState(false);
 
+  // YENİ: Dolabı ve Değişim Ekranını Yönetmek İçin Eklenen State'ler
+  const [wardrobeItems, setWardrobeItems] = useState<ClothingItem[]>([]);
+  const [changingPart, setChangingPart] = useState<'top' | 'bottom' | null>(null);
+
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -224,15 +228,24 @@ export default function HomeScreen() {
     return Boolean(age && gender && profession);
   }, []);
 
+  // YENİ: Dolaptaki tüm kıyafetleri arka planda hafızaya alan fonksiyon
+  const fetchAllClothes = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from('clothes').select('*').eq('user_id', user.id);
+    if (data) setWardrobeItems(data);
+  }, [user]);
+
   useEffect(() => {
     if (!user) {
       setShowProfileReminderModal(false);
+      setWardrobeItems([]);
       return;
     }
 
     const completed = checkProfileCompletion(user);
     setShowProfileReminderModal(!completed);
-  }, [user, checkProfileCompletion]);
+    fetchAllClothes(); // Oturum açılınca dolabı doldur
+  }, [user, checkProfileCompletion, fetchAllClothes]);
 
   const getSavedOutfitsKey = useCallback(() => {
     return user ? `${SAVED_OUTFITS_KEY}:${user.id}` : SAVED_OUTFITS_KEY;
@@ -314,7 +327,7 @@ export default function HomeScreen() {
     setIsSuggesting(true);
     try {
       const {
-        data: { user: currentUser }, // currentUser olarak cektik ki state'deki user ile karismasin
+        data: { user: currentUser },
         error: userError,
       } = await supabase.auth.getUser();
       if (userError || !currentUser) {
@@ -322,8 +335,14 @@ export default function HomeScreen() {
         return;
       }
 
-      const { data: clothes, error } = await supabase.from('clothes').select('*').eq('user_id', currentUser.id);
-      if (error) throw error;
+      // Hafızadaki dolabı kullan, yoksa yeniden çek
+      let clothes = wardrobeItems;
+      if (clothes.length === 0) {
+        const { data, error } = await supabase.from('clothes').select('*').eq('user_id', currentUser.id);
+        if (error) throw error;
+        clothes = data;
+        setWardrobeItems(data);
+      }
 
       if (!clothes || clothes.length < 2) {
         Alert.alert('Dolap Bos Kanka', 'Once dolaba en az bir ust ve bir alt giyim ekle kanka!');
@@ -343,7 +362,6 @@ export default function HomeScreen() {
           ? weatherState.weather
           : { tempC: 20, description: 'bilinmiyor', city: undefined };
 
-      // KANKA BAKIŞI: Dinamik Profil Verilerini Çekiyoruz!
       const userProfile = {
         age: currentUser.user_metadata?.age ? Number(currentUser.user_metadata.age) : undefined,
         gender: currentUser.user_metadata?.gender || undefined,
@@ -358,7 +376,7 @@ export default function HomeScreen() {
         })),
         weather,
         excludeCombinations: recentCombinations,
-        userProfile, // Dinamik veriyi AI'a besledik
+        userProfile,
       });
 
       const top = clothes.find((item: ClothingItem) => item.id === suggestion.topId);
@@ -378,6 +396,7 @@ export default function HomeScreen() {
         ];
         return next.slice(0, 10);
       });
+      
       setSuggestedOutfit({ top, bottom, reason: suggestion.reason });
       setShowResultModal(true);
     } catch (error) {
@@ -423,6 +442,27 @@ export default function HomeScreen() {
     setSelectedWeekDay(dayIndex);
     setShowDayOutfitsModal(true);
   }, []);
+
+  // YENİ: Parça değiştirme işlemi (Panelden bir ürün seçildiğinde çalışır)
+  const handleReplaceItem = (newItem: ClothingItem) => {
+    if (!suggestedOutfit || !changingPart) return;
+    
+    setSuggestedOutfit({
+      ...suggestedOutfit,
+      [changingPart]: newItem
+    });
+    setChangingPart(null); // Seçimden sonra paneli kapat
+  };
+
+  // YENİ: Değiştirme panelinde gösterilecek kıyafetleri dinamik filtrele
+  const replacementOptions = useMemo(() => {
+    if (!changingPart) return [];
+    if (changingPart === 'top') {
+      return wardrobeItems.filter(item => ['Üst Giyim', 'Dış Giyim'].includes(item.category) && item.id !== suggestedOutfit?.top.id);
+    } else {
+      return wardrobeItems.filter(item => item.category === 'Alt Giyim' && item.id !== suggestedOutfit?.bottom.id);
+    }
+  }, [changingPart, wardrobeItems, suggestedOutfit]);
 
   const weatherData = useMemo(() => {
     if (weatherState.status === 'ready') {
@@ -507,6 +547,7 @@ export default function HomeScreen() {
       <WeeklyOutfitSummary savedOutfits={savedOutfits} onSelectDay={openDayOutfits} onOpenCalendar={() => setShowCalendarModal(true)} />
       <WardrobeStats clothesCount={dbStats.clothes} outfitCount={dbStats.outfits} />
 
+      {/* İNTERAKTİF KOMBİN SONUÇ MODALI */}
       <Modal visible={showResultModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.suggestionBox}>
@@ -521,16 +562,33 @@ export default function HomeScreen() {
             </Text>
 
             <View style={styles.outfitPair}>
-              <View style={styles.suggestedCard}>
-                <Image source={{ uri: suggestedOutfit?.top.image_url }} style={styles.suggestedImg} />
+              {/* Tıklanabilir Üst Giyim */}
+              <TouchableOpacity 
+                style={styles.suggestedCard} 
+                activeOpacity={0.8} 
+                onPress={() => setChangingPart('top')}
+              >
+                <View style={styles.imageWrapper}>
+                  <Image source={{ uri: suggestedOutfit?.top.image_url }} style={styles.suggestedImg} />
+                  <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
+                </View>
                 <Text style={styles.suggestedLabel}>
-                  {suggestedOutfit?.top.category === 'Dış Giyim' ? 'Dis Giyim' : 'Ust Giyim'}
+                  {suggestedOutfit?.top.category === 'Dış Giyim' ? 'Dis Giyim (Değiştir)' : 'Ust Giyim (Değiştir)'}
                 </Text>
-              </View>
-              <View style={styles.suggestedCard}>
-                <Image source={{ uri: suggestedOutfit?.bottom.image_url }} style={styles.suggestedImg} />
-                <Text style={styles.suggestedLabel}>Alt Giyim</Text>
-              </View>
+              </TouchableOpacity>
+              
+              {/* Tıklanabilir Alt Giyim */}
+              <TouchableOpacity 
+                style={styles.suggestedCard} 
+                activeOpacity={0.8} 
+                onPress={() => setChangingPart('bottom')}
+              >
+                <View style={styles.imageWrapper}>
+                  <Image source={{ uri: suggestedOutfit?.bottom.image_url }} style={styles.suggestedImg} />
+                  <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
+                </View>
+                <Text style={styles.suggestedLabel}>Alt Giyim (Değiştir)</Text>
+              </TouchableOpacity>
             </View>
 
             <TouchableOpacity style={styles.closeBtn} onPress={saveLikedOutfit}>
@@ -538,6 +596,30 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* AŞAĞIDAN KAYARAK AÇILAN DEĞİŞTİRME PANELİ (BOTTOM SHEET) */}
+      <Modal visible={!!changingPart} animationType="slide" transparent>
+        <TouchableOpacity style={styles.bottomSheetOverlay} activeOpacity={1} onPress={() => setChangingPart(null)}>
+          <View style={styles.bottomSheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>
+              {changingPart === 'top' ? 'Üst Giyim Seçeneklerin' : 'Alt Giyim Seçeneklerin'}
+            </Text>
+            
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.replacementScroll}>
+              {replacementOptions.length === 0 ? (
+                 <Text style={styles.emptyDayText}>Dolabında bu kategoride başka eşya yok kanka.</Text>
+              ) : (
+                replacementOptions.map(item => (
+                  <TouchableOpacity key={item.id} style={styles.replacementCard} onPress={() => handleReplaceItem(item)}>
+                    <Image source={{ uri: item.image_url }} style={styles.replacementImg} />
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       <Modal visible={showDayOutfitsModal} animationType="slide" transparent>
@@ -725,7 +807,12 @@ const styles = StyleSheet.create({
   suggestionDesc: { fontSize: 14, color: '#666', marginBottom: 20 },
   outfitPair: { flexDirection: 'row', gap: 15, marginBottom: 25 },
   suggestedCard: { flex: 1, alignItems: 'center' },
-  suggestedImg: { width: '100%', height: 200, borderRadius: 15, marginBottom: 8 },
+  
+  // EKLENEN STİLLER: Değiştirme ikonu ve görsel stilleri
+  imageWrapper: { width: '100%', position: 'relative', marginBottom: 8 },
+  suggestedImg: { width: '100%', height: 200, borderRadius: 15 },
+  swapBadge: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.7)', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  
   savedOutfitImg: { width: '100%', height: 160, borderRadius: 15, marginBottom: 8 },
   suggestedLabel: { fontSize: 12, fontWeight: 'bold', color: '#888' },
   closeBtn: { backgroundColor: '#000', paddingVertical: 16, borderRadius: 20, width: '100%', alignItems: 'center' },
@@ -738,4 +825,13 @@ const styles = StyleSheet.create({
   reminderText: { fontSize: 14, color: '#444', lineHeight: 20, marginBottom: 22 },
   reminderButton: { backgroundColor: '#000', borderRadius: 20, paddingVertical: 14, paddingHorizontal: 22 },
   reminderButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  // EKLENEN STİLLER: Bottom Sheet Stilleri
+  bottomSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 20, paddingBottom: 40, minHeight: 250 },
+  sheetHandle: { width: 40, height: 5, backgroundColor: '#ddd', borderRadius: 3, alignSelf: 'center', marginBottom: 15 },
+  sheetTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
+  replacementScroll: { gap: 15, paddingHorizontal: 5 },
+  replacementCard: { width: 120, height: 150, borderRadius: 15, overflow: 'hidden', backgroundColor: '#f0f0f0', borderWidth: 2, borderColor: 'transparent' },
+  replacementImg: { width: '100%', height: '100%', resizeMode: 'cover' }
 });
