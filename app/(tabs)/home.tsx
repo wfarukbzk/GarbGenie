@@ -37,9 +37,13 @@ type ClothingItem = {
   season: string;
 };
 
+// KANKA BAKIŞI: Full Outfit için yeni parçalar
 type SuggestedOutfit = {
   top: ClothingItem;
   bottom: ClothingItem;
+  shoes?: ClothingItem;
+  outerwear?: ClothingItem;
+  accessory?: ClothingItem;
   reason?: string;
 };
 
@@ -207,7 +211,7 @@ export default function HomeScreen() {
 
   // YENİ: Dolabı ve Değişim Ekranını Yönetmek İçin Eklenen State'ler
   const [wardrobeItems, setWardrobeItems] = useState<ClothingItem[]>([]);
-  const [changingPart, setChangingPart] = useState<'top' | 'bottom' | null>(null);
+  const [changingPart, setChangingPart] = useState<'top' | 'bottom' | 'shoes' | 'outerwear' | 'accessory' | null>(null);
 
   const isMountedRef = useRef(true);
 
@@ -218,7 +222,9 @@ export default function HomeScreen() {
   }, []);
 
   const safeSet = useCallback((next: WeatherUiState) => {
-    if (isMountedRef.current) setWeatherState(next);
+    if (isMountedRef.current) {
+      setWeatherState(next);
+    }
   }, []);
 
   const checkProfileCompletion = useCallback((currentUser: any) => {
@@ -232,7 +238,9 @@ export default function HomeScreen() {
   const fetchAllClothes = useCallback(async () => {
     if (!user) return;
     const { data } = await supabase.from('clothes').select('*').eq('user_id', user.id);
-    if (data) setWardrobeItems(data);
+    if (data) {
+      setWardrobeItems(data);
+    }
   }, [user]);
 
   useEffect(() => {
@@ -291,10 +299,12 @@ export default function HomeScreen() {
   const loadWeather = useCallback(async () => {
     safeSet({ status: 'loading' });
     const permission = await Location.requestForegroundPermissionsAsync();
+    
     if (permission.status !== Location.PermissionStatus.GRANTED) {
       safeSet({ status: 'permission_denied' });
       return;
     }
+    
     const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     const weather = await fetchCurrentWeatherByCoords({ lat: position.coords.latitude, lon: position.coords.longitude });
     safeSet({ status: 'ready', weather });
@@ -324,12 +334,16 @@ export default function HomeScreen() {
   }, [user, loadSavedOutfits, fetchStats]);
 
   const generateSuggestion = async () => {
+    // KANKA BAKIŞI: iOS çift tıklamasını ve kilitlenmesini engellemek için kontrol
+    if (isSuggesting) return;
     setIsSuggesting(true);
+    
     try {
       const {
         data: { user: currentUser },
         error: userError,
       } = await supabase.auth.getUser();
+      
       if (userError || !currentUser) {
         Alert.alert('Oturum', 'Kombin olusturmak icin giris yapman lazim kanka.');
         return;
@@ -381,6 +395,9 @@ export default function HomeScreen() {
 
       const top = clothes.find((item: ClothingItem) => item.id === suggestion.topId);
       const bottom = clothes.find((item: ClothingItem) => item.id === suggestion.bottomId);
+      const shoes = clothes.find((item: ClothingItem) => item.id === suggestion.shoesId);
+      const outerwear = clothes.find((item: ClothingItem) => item.id === suggestion.outerwearId);
+      const accessory = clothes.find((item: ClothingItem) => item.id === suggestion.accessoryId);
 
       if (!top || !bottom) {
         Alert.alert('Hata', 'Gemini kombin secimi gecersiz geldi, tekrar dene kanka.');
@@ -397,7 +414,7 @@ export default function HomeScreen() {
         return next.slice(0, 10);
       });
       
-      setSuggestedOutfit({ top, bottom, reason: suggestion.reason });
+      setSuggestedOutfit({ top, bottom, shoes, outerwear, accessory, reason: suggestion.reason });
       setShowResultModal(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Kombin olusturulamadi kanka.';
@@ -409,6 +426,7 @@ export default function HomeScreen() {
 
   const saveLikedOutfit = useCallback(async () => {
     if (!suggestedOutfit) return;
+    
     if (!user) {
       Alert.alert('Oturum', 'Kombini kaydetmek icin giris yapman lazim kanka.');
       return;
@@ -419,8 +437,7 @@ export default function HomeScreen() {
         id: `${Date.now()}`,
         dayIndex: getTodayIndex(),
         createdAt: new Date().toISOString(),
-        top: suggestedOutfit.top,
-        bottom: suggestedOutfit.bottom,
+        ...suggestedOutfit
       },
       ...savedOutfits,
     ];
@@ -457,10 +474,22 @@ export default function HomeScreen() {
   // YENİ: Değiştirme panelinde gösterilecek kıyafetleri dinamik filtrele
   const replacementOptions = useMemo(() => {
     if (!changingPart) return [];
-    if (changingPart === 'top') {
-      return wardrobeItems.filter(item => ['Üst Giyim', 'Dış Giyim'].includes(item.category) && item.id !== suggestedOutfit?.top.id);
-    } else {
-      return wardrobeItems.filter(item => item.category === 'Alt Giyim' && item.id !== suggestedOutfit?.bottom.id);
+    
+    const currentId = suggestedOutfit?.[changingPart]?.id;
+    
+    switch(changingPart) {
+        case 'top': 
+          return wardrobeItems.filter(item => ['Üst Giyim', 'Dış Giyim'].includes(item.category) && item.id !== currentId);
+        case 'bottom': 
+          return wardrobeItems.filter(item => item.category === 'Alt Giyim' && item.id !== currentId);
+        case 'shoes': 
+          return wardrobeItems.filter(item => item.category === 'Ayakkabı' && item.id !== currentId);
+        case 'outerwear': 
+          return wardrobeItems.filter(item => item.category === 'Dış Giyim' && item.id !== currentId);
+        case 'accessory': 
+          return wardrobeItems.filter(item => item.category === 'Takı & Aksesuar' && item.id !== currentId);
+        default: 
+          return [];
     }
   }, [changingPart, wardrobeItems, suggestedOutfit]);
 
@@ -487,14 +516,21 @@ export default function HomeScreen() {
   }, [savedOutfits]);
 
   const calendarDays = useMemo(() => getMonthMatrix(calendarMonth), [calendarMonth]);
+  
   const selectedCalendarOutfits = useMemo(() => outfitsByDate[selectedCalendarDateKey] ?? [], [outfitsByDate, selectedCalendarDateKey]);
+  
   const selectedCalendarDate = useMemo(() => {
     const [year, month, day] = selectedCalendarDateKey.split('-').map(Number);
     return new Date(year, month - 1, day);
   }, [selectedCalendarDateKey]);
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView 
+      style={styles.scroll} 
+      contentContainerStyle={styles.container} 
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled" 
+    >
       <LinearGradient colors={['#1a1a2e', '#16213e', '#0f3460']} style={styles.weatherCard} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
         <View style={styles.weatherTop}>
           <View>
@@ -502,7 +538,11 @@ export default function HomeScreen() {
             <Text style={styles.weatherDesc}>{weatherData?.desc ?? (weatherState.status === 'permission_denied' ? 'Konum izni yok' : 'Yukleniyor...')}</Text>
           </View>
           <View style={styles.weatherTempWrap}>
-            {weatherState.status === 'loading' ? <ActivityIndicator color="#fff" size="large" /> : <Text style={styles.weatherTemp}>{weatherData?.temp ?? '-'}</Text>}
+            {weatherState.status === 'loading' ? (
+              <ActivityIndicator color="#fff" size="large" />
+            ) : (
+              <Text style={styles.weatherTemp}>{weatherData?.temp ?? '-'}</Text>
+            )}
           </View>
         </View>
         <View style={styles.weatherBottom}>
@@ -532,7 +572,11 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      <TouchableOpacity style={styles.mainButton} onPress={generateSuggestion} disabled={isSuggesting}>
+      <TouchableOpacity 
+        style={styles.mainButton} 
+        onPress={generateSuggestion} 
+        activeOpacity={0.85}
+      >
         {isSuggesting ? (
           <ActivityIndicator color="#fff" />
         ) : (
@@ -557,17 +601,24 @@ export default function HomeScreen() {
                 <X size={26} color="#000" />
               </TouchableOpacity>
             </View>
+            
             <Text style={styles.suggestionDesc}>
               {suggestedOutfit?.reason ?? 'Bu havada harika goruneceksin kanka:'}
             </Text>
 
-            <View style={styles.outfitPair}>
-              {/* Tıklanabilir Üst Giyim */}
-              <TouchableOpacity 
-                style={styles.suggestedCard} 
-                activeOpacity={0.8} 
-                onPress={() => setChangingPart('top')}
-              >
+            <ScrollView contentContainerStyle={styles.outfitGrid} showsVerticalScrollIndicator={false}>
+              
+              {suggestedOutfit?.outerwear && (
+                 <TouchableOpacity style={styles.suggestedCard} activeOpacity={0.8} onPress={() => setChangingPart('outerwear')}>
+                   <View style={styles.imageWrapper}>
+                     <Image source={{ uri: suggestedOutfit.outerwear.image_url }} style={styles.suggestedImg} />
+                     <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
+                   </View>
+                   <Text style={styles.suggestedLabel}>Dış Giyim (Değiştir)</Text>
+                 </TouchableOpacity>
+              )}
+
+              <TouchableOpacity style={styles.suggestedCard} activeOpacity={0.8} onPress={() => setChangingPart('top')}>
                 <View style={styles.imageWrapper}>
                   <Image source={{ uri: suggestedOutfit?.top.image_url }} style={styles.suggestedImg} />
                   <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
@@ -577,49 +628,70 @@ export default function HomeScreen() {
                 </Text>
               </TouchableOpacity>
               
-              {/* Tıklanabilir Alt Giyim */}
-              <TouchableOpacity 
-                style={styles.suggestedCard} 
-                activeOpacity={0.8} 
-                onPress={() => setChangingPart('bottom')}
-              >
+              <TouchableOpacity style={styles.suggestedCard} activeOpacity={0.8} onPress={() => setChangingPart('bottom')}>
                 <View style={styles.imageWrapper}>
                   <Image source={{ uri: suggestedOutfit?.bottom.image_url }} style={styles.suggestedImg} />
                   <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
                 </View>
                 <Text style={styles.suggestedLabel}>Alt Giyim (Değiştir)</Text>
               </TouchableOpacity>
-            </View>
+
+              {suggestedOutfit?.shoes && (
+                 <TouchableOpacity style={styles.suggestedCard} activeOpacity={0.8} onPress={() => setChangingPart('shoes')}>
+                   <View style={styles.imageWrapper}>
+                     <Image source={{ uri: suggestedOutfit.shoes.image_url }} style={styles.suggestedImg} />
+                     <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
+                   </View>
+                   <Text style={styles.suggestedLabel}>Ayakkabı (Değiştir)</Text>
+                 </TouchableOpacity>
+              )}
+
+              {suggestedOutfit?.accessory && (
+                 <TouchableOpacity style={styles.suggestedCard} activeOpacity={0.8} onPress={() => setChangingPart('accessory')}>
+                   <View style={styles.imageWrapper}>
+                     <Image source={{ uri: suggestedOutfit.accessory.image_url }} style={styles.suggestedImg} />
+                     <View style={styles.swapBadge}><RefreshCw size={14} color="#fff" /></View>
+                   </View>
+                   <Text style={styles.suggestedLabel}>Takı (Değiştir)</Text>
+                 </TouchableOpacity>
+              )}
+
+            </ScrollView>
 
             <TouchableOpacity style={styles.closeBtn} onPress={saveLikedOutfit}>
               <Text style={styles.closeBtnText}>Kombini Begendim!</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
 
-      {/* AŞAĞIDAN KAYARAK AÇILAN DEĞİŞTİRME PANELİ (BOTTOM SHEET) */}
-      <Modal visible={!!changingPart} animationType="slide" transparent>
-        <TouchableOpacity style={styles.bottomSheetOverlay} activeOpacity={1} onPress={() => setChangingPart(null)}>
-          <View style={styles.bottomSheet}>
-            <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>
-              {changingPart === 'top' ? 'Üst Giyim Seçeneklerin' : 'Alt Giyim Seçeneklerin'}
-            </Text>
-            
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.replacementScroll}>
-              {replacementOptions.length === 0 ? (
-                 <Text style={styles.emptyDayText}>Dolabında bu kategoride başka eşya yok kanka.</Text>
-              ) : (
-                replacementOptions.map(item => (
-                  <TouchableOpacity key={item.id} style={styles.replacementCard} onPress={() => handleReplaceItem(item)}>
-                    <Image source={{ uri: item.image_url }} style={styles.replacementImg} />
-                  </TouchableOpacity>
-                ))
-              )}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
+          {/* KANKA BAKIŞI: iOS Çift Modal Hatasını Çözen Katman */}
+          {!!changingPart && (
+            <TouchableOpacity style={styles.bottomSheetOverlay} activeOpacity={1} onPress={() => setChangingPart(null)}>
+              <TouchableOpacity activeOpacity={1} style={styles.bottomSheet}>
+                <View style={styles.sheetHandle} />
+                <Text style={styles.sheetTitle}>
+                  {changingPart === 'top' ? 'Üst Giyim Seçeneklerin' 
+                    : changingPart === 'bottom' ? 'Alt Giyim Seçeneklerin'
+                    : changingPart === 'shoes' ? 'Ayakkabı Seçeneklerin'
+                    : changingPart === 'outerwear' ? 'Dış Giyim Seçeneklerin'
+                    : 'Aksesuar Seçeneklerin'}
+                </Text>
+                
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.replacementScroll}>
+                  {replacementOptions.length === 0 ? (
+                    <Text style={styles.emptyDayText}>Dolabında bu kategoride başka eşya yok kanka.</Text>
+                  ) : (
+                    replacementOptions.map(item => (
+                      <TouchableOpacity key={item.id} style={styles.replacementCard} onPress={() => handleReplaceItem(item)}>
+                        <Image source={{ uri: item.image_url }} style={styles.replacementImg} />
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </ScrollView>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          )}
+
+        </View>
       </Modal>
 
       <Modal visible={showDayOutfitsModal} animationType="slide" transparent>
@@ -639,15 +711,27 @@ export default function HomeScreen() {
                 selectedDayOutfits.map((outfit) => (
                   <View key={outfit.id} style={styles.savedOutfitCard}>
                     <Text style={styles.savedOutfitTitle}>Kaydedilen Kombin</Text>
-                    <View style={styles.outfitPair}>
-                      <View style={styles.suggestedCard}>
-                        <Image source={{ uri: outfit.top.image_url }} style={styles.savedOutfitImg} />
-                        <Text style={styles.suggestedLabel}>Ust Giyim</Text>
+                    <View style={styles.outfitGridSmall}>
+                      {outfit.outerwear && (
+                        <View style={styles.suggestedCardSmall}>
+                          <Image source={{ uri: outfit.outerwear.image_url }} style={styles.savedOutfitImgSmall} />
+                          <Text style={styles.suggestedLabelSmall}>Dış Giyim</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestedCardSmall}>
+                        <Image source={{ uri: outfit.top.image_url }} style={styles.savedOutfitImgSmall} />
+                        <Text style={styles.suggestedLabelSmall}>Ust Giyim</Text>
                       </View>
-                      <View style={styles.suggestedCard}>
-                        <Image source={{ uri: outfit.bottom.image_url }} style={styles.savedOutfitImg} />
-                        <Text style={styles.suggestedLabel}>Alt Giyim</Text>
+                      <View style={styles.suggestedCardSmall}>
+                        <Image source={{ uri: outfit.bottom.image_url }} style={styles.savedOutfitImgSmall} />
+                        <Text style={styles.suggestedLabelSmall}>Alt Giyim</Text>
                       </View>
+                      {outfit.shoes && (
+                        <View style={styles.suggestedCardSmall}>
+                          <Image source={{ uri: outfit.shoes.image_url }} style={styles.savedOutfitImgSmall} />
+                          <Text style={styles.suggestedLabelSmall}>Ayakkabı</Text>
+                        </View>
+                      )}
                     </View>
                   </View>
                 ))
@@ -694,11 +778,21 @@ export default function HomeScreen() {
                 return (
                   <TouchableOpacity
                     key={dateKey}
-                    style={[styles.calendarCell, isSelected && styles.calendarCellSelected, isToday && styles.calendarCellToday]}
+                    style={[
+                      styles.calendarCell, 
+                      isSelected && styles.calendarCellSelected, 
+                      isToday && styles.calendarCellToday
+                    ]}
                     onPress={() => setSelectedCalendarDateKey(dateKey)}
                     activeOpacity={0.85}
                   >
-                    <Text style={[styles.calendarCellText, !isCurrentMonth && styles.calendarCellTextMuted, isSelected && styles.calendarCellTextSelected]}>
+                    <Text 
+                      style={[
+                        styles.calendarCellText, 
+                        !isCurrentMonth && styles.calendarCellTextMuted, 
+                        isSelected && styles.calendarCellTextSelected
+                      ]}
+                    >
                       {date.getDate()}
                     </Text>
                     {count > 0 && (
@@ -722,16 +816,30 @@ export default function HomeScreen() {
               ) : (
                 selectedCalendarOutfits.map((outfit) => (
                   <View key={outfit.id} style={styles.savedOutfitCard}>
-                    <Text style={styles.savedOutfitTitle}>{new Date(outfit.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}</Text>
-                    <View style={styles.outfitPair}>
-                      <View style={styles.suggestedCard}>
-                        <Image source={{ uri: outfit.top.image_url }} style={styles.savedOutfitImg} />
-                        <Text style={styles.suggestedLabel}>Ust Giyim</Text>
+                    <Text style={styles.savedOutfitTitle}>
+                      {new Date(outfit.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                    <View style={styles.outfitGridSmall}>
+                      {outfit.outerwear && (
+                        <View style={styles.suggestedCardSmall}>
+                          <Image source={{ uri: outfit.outerwear.image_url }} style={styles.savedOutfitImgSmall} />
+                          <Text style={styles.suggestedLabelSmall}>Dış Giyim</Text>
+                        </View>
+                      )}
+                      <View style={styles.suggestedCardSmall}>
+                        <Image source={{ uri: outfit.top.image_url }} style={styles.savedOutfitImgSmall} />
+                        <Text style={styles.suggestedLabelSmall}>Ust Giyim</Text>
                       </View>
-                      <View style={styles.suggestedCard}>
-                        <Image source={{ uri: outfit.bottom.image_url }} style={styles.savedOutfitImg} />
-                        <Text style={styles.suggestedLabel}>Alt Giyim</Text>
+                      <View style={styles.suggestedCardSmall}>
+                        <Image source={{ uri: outfit.bottom.image_url }} style={styles.savedOutfitImgSmall} />
+                        <Text style={styles.suggestedLabelSmall}>Alt Giyim</Text>
                       </View>
+                      {outfit.shoes && (
+                        <View style={styles.suggestedCardSmall}>
+                          <Image source={{ uri: outfit.shoes.image_url }} style={styles.savedOutfitImgSmall} />
+                          <Text style={styles.suggestedLabelSmall}>Ayakkabı</Text>
+                        </View>
+                      )}
                     </View>
                   </View>
                 ))
@@ -745,93 +853,510 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: { flex: 1, backgroundColor: '#fff' },
-  container: { padding: 20, paddingTop: 55, paddingBottom: 40, alignItems: 'center' },
-  weatherCard: { width: '100%', borderRadius: 24, padding: 22, marginBottom: 28, elevation: 8 },
-  weatherTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  weatherCity: { fontSize: 20, fontWeight: '800', color: '#fff' },
-  weatherDesc: { fontSize: 13, color: 'rgba(255,255,255,0.7)', textTransform: 'capitalize' },
-  weatherTempWrap: { alignItems: 'flex-end' },
-  weatherTemp: { fontSize: 48, fontWeight: '200', color: '#fff' },
-  weatherBottom: { flexDirection: 'row', alignItems: 'center', gap: 6, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.15)', paddingTop: 12 },
-  weatherHint: { fontSize: 11, color: 'rgba(255,255,255,0.55)', flex: 1 },
-  heroText: { fontSize: 22, fontWeight: '800', textAlign: 'center', marginBottom: 20, color: '#111' },
-  mainButton: { backgroundColor: '#000', paddingVertical: 18, borderRadius: 30, marginBottom: 32, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center' },
-  buttonText: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
-  sectionWrap: { width: '100%', marginBottom: 28 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  calendarButton: { padding: 6, borderRadius: 999, backgroundColor: '#f3f3f3' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 14 },
-  outfitCard: { width: CARD_WIDTH, marginRight: 12, borderRadius: 16, overflow: 'hidden', backgroundColor: '#f0f0f0' },
-  outfitImage: { width: '100%', height: 180 },
-  outfitLabel: { padding: 10, fontSize: 13, fontWeight: '600', color: '#333' },
-  weekRow: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#f9f9f9', borderRadius: 16, padding: 16 },
-  dayCol: { alignItems: 'center', gap: 8 },
-  dayLabel: { fontSize: 11, color: '#999', fontWeight: '600' },
-  dayLabelToday: { color: '#000', fontWeight: '800' },
-  dayDot: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  dayDotFilled: { backgroundColor: '#000' },
-  dayDotEmpty: { backgroundColor: '#e5e5e5' },
-  dayDotToday: { borderWidth: 2, borderColor: '#000' },
-  dayDotCount: { color: '#fff', fontSize: 12, fontWeight: '800' },
-  weekHint: { marginTop: 10, color: '#666', fontSize: 12 },
-  statsRow: { flexDirection: 'row', gap: 10 },
-  statCard: { flex: 1, borderRadius: 16, padding: 16, alignItems: 'center', gap: 6 },
-  statValue: { fontSize: 26, fontWeight: '800', color: '#fff' },
-  statLabel: { fontSize: 11, color: 'rgba(255,255,255,0.85)', fontWeight: '600' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  suggestionBox: { backgroundColor: '#fff', borderRadius: 30, padding: 25, width: '100%', alignItems: 'center' },
-  daySuggestionBox: { backgroundColor: '#fff', borderRadius: 30, padding: 25, width: '100%', maxHeight: '85%' },
-  calendarModalBox: { backgroundColor: '#fff', borderRadius: 30, padding: 25, width: '100%', maxHeight: '92%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 15, alignItems: 'center' },
-  modalTitle: { fontSize: 20, fontWeight: 'bold' },
-  calendarNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  calendarNavButton: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#f3f3f3' },
-  calendarNavText: { fontSize: 12, fontWeight: '700', color: '#222' },
-  calendarMonthTitle: { fontSize: 18, fontWeight: '800', color: '#111' },
-  calendarWeekHeader: { flexDirection: 'row', marginBottom: 8 },
-  calendarWeekHeaderText: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '700', color: '#777' },
-  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
-  calendarCell: { width: '13.1%', aspectRatio: 1, borderRadius: 16, backgroundColor: '#f6f6f6', justifyContent: 'center', alignItems: 'center', position: 'relative' },
-  calendarCellSelected: { backgroundColor: '#111' },
-  calendarCellToday: { borderWidth: 2, borderColor: '#111' },
-  calendarCellText: { fontSize: 13, fontWeight: '700', color: '#111' },
-  calendarCellTextMuted: { color: '#bbb' },
-  calendarCellTextSelected: { color: '#fff' },
-  calendarBadge: { position: 'absolute', bottom: 6, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#ff5a5f', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
-  calendarBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-  calendarDetailHeader: { marginBottom: 12 },
-  calendarDetailTitle: { fontSize: 16, fontWeight: '800', color: '#111' },
-  calendarDetailCount: { fontSize: 12, color: '#666', marginTop: 2 },
-  calendarDetailScroll: { width: '100%' },
-  suggestionDesc: { fontSize: 14, color: '#666', marginBottom: 20 },
-  outfitPair: { flexDirection: 'row', gap: 15, marginBottom: 25 },
-  suggestedCard: { flex: 1, alignItems: 'center' },
+  scroll: { 
+    flex: 1, 
+    backgroundColor: '#fff' 
+  },
+  container: { 
+    padding: 20, 
+    paddingTop: 55, 
+    paddingBottom: 40, 
+    alignItems: 'center' 
+  },
+  weatherCard: { 
+    width: '100%', 
+    borderRadius: 24, 
+    padding: 22, 
+    marginBottom: 28, 
+    elevation: 8 
+  },
+  weatherTop: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 16 
+  },
+  weatherCity: { 
+    fontSize: 20, 
+    fontWeight: '800', 
+    color: '#fff' 
+  },
+  weatherDesc: { 
+    fontSize: 13, 
+    color: 'rgba(255,255,255,0.7)', 
+    textTransform: 'capitalize' 
+  },
+  weatherTempWrap: { 
+    alignItems: 'flex-end' 
+  },
+  weatherTemp: { 
+    fontSize: 48, 
+    fontWeight: '200', 
+    color: '#fff' 
+  },
+  weatherBottom: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 6, 
+    borderTopWidth: 1, 
+    borderTopColor: 'rgba(255,255,255,0.15)', 
+    paddingTop: 12 
+  },
+  weatherHint: { 
+    fontSize: 11, 
+    color: 'rgba(255,255,255,0.55)', 
+    flex: 1 
+  },
+  heroText: { 
+    fontSize: 22, 
+    fontWeight: '800', 
+    textAlign: 'center', 
+    marginBottom: 20, 
+    color: '#111' 
+  },
+  mainButton: { 
+    backgroundColor: '#000', 
+    paddingVertical: 18, 
+    borderRadius: 30, 
+    marginBottom: 32, 
+    width: '100%', 
+    alignItems: 'center', 
+    flexDirection: 'row', 
+    justifyContent: 'center' 
+  },
+  buttonText: { 
+    color: '#fff', 
+    fontSize: 17, 
+    fontWeight: 'bold' 
+  },
+  sectionWrap: { 
+    width: '100%', 
+    marginBottom: 28 
+  },
+  sectionHeader: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    marginBottom: 14 
+  },
+  calendarButton: { 
+    padding: 6, 
+    borderRadius: 999, 
+    backgroundColor: '#f3f3f3' 
+  },
+  sectionTitle: { 
+    fontSize: 16, 
+    fontWeight: '700', 
+    color: '#111', 
+    marginBottom: 14 
+  },
+  outfitCard: { 
+    width: CARD_WIDTH, 
+    marginRight: 12, 
+    borderRadius: 16, 
+    overflow: 'hidden', 
+    backgroundColor: '#f0f0f0' 
+  },
+  outfitImage: { 
+    width: '100%', 
+    height: 180 
+  },
+  outfitLabel: { 
+    padding: 10, 
+    fontSize: 13, 
+    fontWeight: '600', 
+    color: '#333' 
+  },
+  weekRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    backgroundColor: '#f9f9f9', 
+    borderRadius: 16, 
+    padding: 16 
+  },
+  dayCol: { 
+    alignItems: 'center', 
+    gap: 8 
+  },
+  dayLabel: { 
+    fontSize: 11, 
+    color: '#999', 
+    fontWeight: '600' 
+  },
+  dayLabelToday: { 
+    color: '#000', 
+    fontWeight: '800' 
+  },
+  dayDot: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  dayDotFilled: { 
+    backgroundColor: '#000' 
+  },
+  dayDotEmpty: { 
+    backgroundColor: '#e5e5e5' 
+  },
+  dayDotToday: { 
+    borderWidth: 2, 
+    borderColor: '#000' 
+  },
+  dayDotCount: { 
+    color: '#fff', 
+    fontSize: 12, 
+    fontWeight: '800' 
+  },
+  weekHint: { 
+    marginTop: 10, 
+    color: '#666', 
+    fontSize: 12 
+  },
+  statsRow: { 
+    flexDirection: 'row', 
+    gap: 10 
+  },
+  statCard: { 
+    flex: 1, 
+    borderRadius: 16, 
+    padding: 16, 
+    alignItems: 'center', 
+    gap: 6 
+  },
+  statValue: { 
+    fontSize: 26, 
+    fontWeight: '800', 
+    color: '#fff' 
+  },
+  statLabel: { 
+    fontSize: 11, 
+    color: 'rgba(255,255,255,0.85)', 
+    fontWeight: '600' 
+  },
+  modalOverlay: { 
+    flex: 1, 
+    backgroundColor: 'rgba(0,0,0,0.8)', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    padding: 20 
+  },
   
-  // EKLENEN STİLLER: Değiştirme ikonu ve görsel stilleri
-  imageWrapper: { width: '100%', position: 'relative', marginBottom: 8 },
-  suggestedImg: { width: '100%', height: 200, borderRadius: 15 },
-  swapBadge: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.7)', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  // MODAL VE GRID GÜNCELLEMESİ (Full Kombin İçin)
+  suggestionBox: { 
+    backgroundColor: '#fff', 
+    borderRadius: 30, 
+    padding: 25, 
+    width: '100%', 
+    maxHeight: '90%', 
+    alignItems: 'center',
+    position: 'relative', 
+    overflow: 'hidden'
+  },
+  outfitGrid: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    justifyContent: 'center', 
+    gap: 15, 
+    paddingBottom: 20 
+  },
+  suggestedCard: { 
+    width: '45%', 
+    alignItems: 'center', 
+    marginBottom: 10 
+  },
+  imageWrapper: { 
+    width: '100%', 
+    position: 'relative', 
+    marginBottom: 8 
+  },
+  suggestedImg: { 
+    width: '100%', 
+    height: 180, 
+    borderRadius: 15, 
+    backgroundColor: '#f5f5f5' 
+  },
+  swapBadge: { 
+    position: 'absolute', 
+    bottom: 10, 
+    right: 10, 
+    backgroundColor: 'rgba(0,0,0,0.7)', 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  suggestedLabel: { 
+    fontSize: 12, 
+    fontWeight: 'bold', 
+    color: '#888', 
+    textAlign: 'center' 
+  },
   
-  savedOutfitImg: { width: '100%', height: 160, borderRadius: 15, marginBottom: 8 },
-  suggestedLabel: { fontSize: 12, fontWeight: 'bold', color: '#888' },
-  closeBtn: { backgroundColor: '#000', paddingVertical: 16, borderRadius: 20, width: '100%', alignItems: 'center' },
-  closeBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  dayOutfitsScroll: { width: '100%' },
-  emptyDayText: { fontSize: 14, color: '#666', textAlign: 'center', paddingVertical: 24 },
-  savedOutfitCard: { padding: 16, borderRadius: 18, backgroundColor: '#f8f8f8', marginBottom: 14 },
-  savedOutfitTitle: { fontSize: 14, fontWeight: '800', color: '#111', marginBottom: 12 },
-  reminderBox: { width: '90%', backgroundColor: '#fff', borderRadius: 24, padding: 22, alignItems: 'center' },
-  reminderText: { fontSize: 14, color: '#444', lineHeight: 20, marginBottom: 22 },
-  reminderButton: { backgroundColor: '#000', borderRadius: 20, paddingVertical: 14, paddingHorizontal: 22 },
-  reminderButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  // KÜÇÜK GÖSTERİM STİLLERİ (Kayıtlı kombinler ekranı için)
+  outfitGridSmall: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    gap: 10, 
+    justifyContent: 'center' 
+  },
+  suggestedCardSmall: { 
+    width: '45%', 
+    alignItems: 'center', 
+    marginBottom: 10 
+  },
+  savedOutfitImgSmall: { 
+    width: '100%', 
+    height: 140, 
+    borderRadius: 12, 
+    backgroundColor: '#eee', 
+    marginBottom: 6 
+  },
+  suggestedLabelSmall: { 
+    fontSize: 11, 
+    fontWeight: 'bold', 
+    color: '#888' 
+  },
+
+  daySuggestionBox: { 
+    backgroundColor: '#fff', 
+    borderRadius: 30, 
+    padding: 25, 
+    width: '100%', 
+    maxHeight: '85%' 
+  },
+  calendarModalBox: { 
+    backgroundColor: '#fff', 
+    borderRadius: 30, 
+    padding: 25, 
+    width: '100%', 
+    maxHeight: '92%' 
+  },
+  modalHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    width: '100%', 
+    marginBottom: 15, 
+    alignItems: 'center' 
+  },
+  modalTitle: { 
+    fontSize: 20, 
+    fontWeight: 'bold' 
+  },
+  calendarNav: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    marginBottom: 16 
+  },
+  calendarNavButton: { 
+    paddingVertical: 8, 
+    paddingHorizontal: 12, 
+    borderRadius: 999, 
+    backgroundColor: '#f3f3f3' 
+  },
+  calendarNavText: { 
+    fontSize: 12, 
+    fontWeight: '700', 
+    color: '#222' 
+  },
+  calendarMonthTitle: { 
+    fontSize: 18, 
+    fontWeight: '800', 
+    color: '#111' 
+  },
+  calendarWeekHeader: { 
+    flexDirection: 'row', 
+    marginBottom: 8 
+  },
+  calendarWeekHeaderText: { 
+    flex: 1, 
+    textAlign: 'center', 
+    fontSize: 12, 
+    fontWeight: '700', 
+    color: '#777' 
+  },
+  calendarGrid: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    gap: 8, 
+    marginBottom: 18 
+  },
+  calendarCell: { 
+    width: '13.1%', 
+    aspectRatio: 1, 
+    borderRadius: 16, 
+    backgroundColor: '#f6f6f6', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    position: 'relative' 
+  },
+  calendarCellSelected: { 
+    backgroundColor: '#111' 
+  },
+  calendarCellToday: { 
+    borderWidth: 2, 
+    borderColor: '#111' 
+  },
+  calendarCellText: { 
+    fontSize: 13, 
+    fontWeight: '700', 
+    color: '#111' 
+  },
+  calendarCellTextMuted: { 
+    color: '#bbb' 
+  },
+  calendarCellTextSelected: { 
+    color: '#fff' 
+  },
+  calendarBadge: { 
+    position: 'absolute', 
+    bottom: 6, 
+    minWidth: 18, 
+    height: 18, 
+    borderRadius: 9, 
+    backgroundColor: '#ff5a5f', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: 4 
+  },
+  calendarBadgeText: { 
+    color: '#fff', 
+    fontSize: 10, 
+    fontWeight: '800' 
+  },
+  calendarDetailHeader: { 
+    marginBottom: 12 
+  },
+  calendarDetailTitle: { 
+    fontSize: 16, 
+    fontWeight: '800', 
+    color: '#111' 
+  },
+  calendarDetailCount: { 
+    fontSize: 12, 
+    color: '#666', 
+    marginTop: 2 
+  },
+  calendarDetailScroll: { 
+    width: '100%' 
+  },
+  suggestionDesc: { 
+    fontSize: 14, 
+    color: '#666', 
+    marginBottom: 20, 
+    textAlign: 'center' 
+  },
+  closeBtn: { 
+    backgroundColor: '#000', 
+    paddingVertical: 16, 
+    borderRadius: 20, 
+    width: '100%', 
+    alignItems: 'center', 
+    marginTop: 10 
+  },
+  closeBtnText: { 
+    color: '#fff', 
+    fontWeight: 'bold', 
+    fontSize: 16 
+  },
+  dayOutfitsScroll: { 
+    width: '100%' 
+  },
+  emptyDayText: { 
+    fontSize: 14, 
+    color: '#666', 
+    textAlign: 'center', 
+    paddingVertical: 24 
+  },
+  savedOutfitCard: { 
+    padding: 16, 
+    borderRadius: 18, 
+    backgroundColor: '#f8f8f8', 
+    marginBottom: 14 
+  },
+  savedOutfitTitle: { 
+    fontSize: 14, 
+    fontWeight: '800', 
+    color: '#111', 
+    marginBottom: 12 
+  },
+  reminderBox: { 
+    width: '90%', 
+    backgroundColor: '#fff', 
+    borderRadius: 24, 
+    padding: 22, 
+    alignItems: 'center' 
+  },
+  reminderText: { 
+    fontSize: 14, 
+    color: '#444', 
+    lineHeight: 20, 
+    marginBottom: 22 
+  },
+  reminderButton: { 
+    backgroundColor: '#000', 
+    borderRadius: 20, 
+    paddingVertical: 14, 
+    paddingHorizontal: 22 
+  },
+  reminderButtonText: { 
+    color: '#fff', 
+    fontWeight: '700', 
+    fontSize: 14 
+  },
 
   // EKLENEN STİLLER: Bottom Sheet Stilleri
-  bottomSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  bottomSheet: { backgroundColor: '#fff', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 20, paddingBottom: 40, minHeight: 250 },
-  sheetHandle: { width: 40, height: 5, backgroundColor: '#ddd', borderRadius: 3, alignSelf: 'center', marginBottom: 15 },
-  sheetTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  replacementScroll: { gap: 15, paddingHorizontal: 5 },
-  replacementCard: { width: 120, height: 150, borderRadius: 15, overflow: 'hidden', backgroundColor: '#f0f0f0', borderWidth: 2, borderColor: 'transparent' },
-  replacementImg: { width: '100%', height: '100%', resizeMode: 'cover' }
+  bottomSheetOverlay: { 
+    position: 'absolute', 
+    top: 0, 
+    bottom: 0, 
+    left: 0, 
+    right: 0, 
+    backgroundColor: 'rgba(0,0,0,0.6)', 
+    justifyContent: 'flex-end', 
+    zIndex: 999 
+  },
+  bottomSheet: { 
+    backgroundColor: '#fff', 
+    borderTopLeftRadius: 30, 
+    borderTopRightRadius: 30, 
+    padding: 20, 
+    paddingBottom: 40, 
+    minHeight: 250 
+  },
+  sheetHandle: { 
+    width: 40, 
+    height: 5, 
+    backgroundColor: '#ddd', 
+    borderRadius: 3, 
+    alignSelf: 'center', 
+    marginBottom: 15 
+  },
+  sheetTitle: { 
+    fontSize: 18, 
+    fontWeight: 'bold', 
+    marginBottom: 15, 
+    textAlign: 'center' 
+  },
+  replacementScroll: { 
+    gap: 15, 
+    paddingHorizontal: 5 
+  },
+  replacementCard: { 
+    width: 120, 
+    height: 150, 
+    borderRadius: 15, 
+    overflow: 'hidden', 
+    backgroundColor: '#f0f0f0', 
+    borderWidth: 2, 
+    borderColor: 'transparent' 
+  },
+  replacementImg: { 
+    width: '100%', 
+    height: '100%', 
+    resizeMode: 'cover' 
+  }
 });

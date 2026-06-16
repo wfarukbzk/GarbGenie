@@ -6,7 +6,6 @@ export type WardrobeItemForAI = {
   season: string;
 };
 
-// KANKA BAKIŞI 1: Kullanıcı profili için yeni bir Tip (Type) ekliyoruz
 export type UserProfileForAI = {
   age?: number;
   gender?: string;
@@ -21,6 +20,9 @@ export type OutfitCombinationKey = {
 export type OutfitSuggestionResult = {
   topId: string;
   bottomId: string;
+  shoesId?: string | null;
+  outerwearId?: string | null;
+  accessoryId?: string | null;
   reason: string;
   source: 'gemini' | 'local';
 };
@@ -94,46 +96,55 @@ export function suggestOutfitLocally(params: {
 }): OutfitSuggestionResult {
   const excludeCombinations = params.excludeCombinations ?? [];
   const seasons = getTargetSeasons(params.weather.tempC);
-  const preferOuter = params.weather.tempC < 12;
+  const temp = Math.round(params.weather.tempC);
+  const preferOuter = temp < 18; // 18 derecenin altındaysa dış giyim öncelikli
 
-  const allTops = params.clothes.filter((item) => TOP_CATEGORIES.includes(item.category));
-  const allBottoms = params.clothes.filter((item) => item.category === BOTTOM_CATEGORY);
+  const allTops = params.clothes.filter((item) => item.category === 'Üst Giyim');
+  const allBottoms = params.clothes.filter((item) => item.category === 'Alt Giyim');
+  const allShoes = params.clothes.filter((item) => item.category === 'Ayakkabı');
+  const allOuterwears = params.clothes.filter((item) => item.category === 'Dış Giyim');
+  const allAccessories = params.clothes.filter((item) => item.category === 'Takı & Aksesuar');
 
   if (allTops.length === 0 || allBottoms.length === 0) {
     throw new Error('Kombin için yeterli üst ve alt giyim bulunamadı.');
   }
 
-  let tops = filterBySeason(allTops, seasons);
-
-  if (preferOuter) {
-    const outerwear = tops.filter((item) => item.category === 'Dış Giyim');
-    if (outerwear.length > 0) {
-      tops = outerwear;
-    }
-  } else {
-    const upperTops = tops.filter((item) => item.category === 'Üst Giyim');
-    if (upperTops.length > 0) {
-      tops = upperTops;
-    }
+  const tops = filterBySeason(allTops, seasons);
+  const bottoms = filterBySeason(allBottoms, seasons);
+  const shoesList = filterBySeason(allShoes, seasons);
+  
+  const { top, bottom } = pickVariedPair(tops.length > 0 ? tops : allTops, bottoms.length > 0 ? bottoms : allBottoms, excludeCombinations);
+  
+  // Ayakkabı seçimi (Zorunlu)
+  const shoes = shoesList.length > 0 ? pickRandom(shoesList) : (allShoes.length > 0 ? pickRandom(allShoes) : null);
+  
+  // Dış Giyim seçimi (Hava soğuksa)
+  let outerwear = null;
+  if (preferOuter && allOuterwears.length > 0) {
+      const validOuters = filterBySeason(allOuterwears, seasons);
+      outerwear = validOuters.length > 0 ? pickRandom(validOuters) : pickRandom(allOuterwears);
   }
 
-  const bottoms = filterBySeason(allBottoms, seasons);
-  const { top, bottom } = pickVariedPair(tops, bottoms, excludeCombinations);
+  // Takı & Aksesuar seçimi (Rastgele bir şıklık katmak için)
+  const accessory = allAccessories.length > 0 && Math.random() > 0.3 ? pickRandom(allAccessories) : null;
 
-  const temp = Math.round(params.weather.tempC);
   const reason =
-    temp < 10
-      ? `${temp}°C oldukca soguk, sicak tutacak parcalari sectim.`
-      : temp < 15
-        ? `${temp}°C serin, katmanli giyinebilecegin bir kombin.`
-        : temp < 22
-          ? `${temp}°C ilik, rahat bir bahar kombini.`
-          : `${temp}°C sicak, hafif ve yazlik parcalar.`;
+    temp < 10 ? `${temp}°C oldukça soğuk, sıcak tutacak tam bir kombin hazırladım.`
+      : temp < 15 ? `${temp}°C serin, katmanlı giyinebileceğin şık bir kombin.`
+        : temp < 22 ? `${temp}°C ılık, rahat ve tarz bir bahar kombini.`
+          : `${temp}°C sıcak, hafif ve ferah parçalar seçtim.`;
 
-  return { topId: top.id, bottomId: bottom.id, reason, source: 'local' };
+  return { 
+    topId: top.id, 
+    bottomId: bottom.id, 
+    shoesId: shoes?.id,
+    outerwearId: outerwear?.id,
+    accessoryId: accessory?.id,
+    reason, 
+    source: 'local' 
+  };
 }
 
-// KANKA BAKIŞI 2: buildPrompt fonksiyonuna userProfile parametresini ekliyoruz.
 function buildPrompt(
   clothes: WardrobeItemForAI[],
   weather: CurrentWeather,
@@ -141,22 +152,26 @@ function buildPrompt(
   userProfile?: UserProfileForAI
 ): string {
   const wardrobeJson = JSON.stringify(clothes);
-  const excludeText =
-    excludeCombinations.length > 0
-      ? `Tekrar etme, bu kombinleri önerme: ${JSON.stringify(excludeCombinations)}. `
-      : '';
+  const excludeText = excludeCombinations.length > 0
+      ? `Tekrar etme, bu üst/alt kombinleri önerme: ${JSON.stringify(excludeCombinations)}. ` : '';
 
-  // KANKA BAKIŞI 3: Profil bilgilerini metin haline getiriyoruz. Eğer bilgi yoksa boş dönecek.
   const profileText = userProfile 
     ? `Kullanıcı Profili - Yaş: ${userProfile.age || 'Belirtilmemiş'}, Cinsiyet: ${userProfile.gender || 'Belirtilmemiş'}, Meslek/Tarz: ${userProfile.profession || 'Belirtilmemiş'}. Lütfen kombin önerisini bu kişisel bilgilere uygun tarzda yap. ` 
     : '';
 
-  return `Gardıroptan hava durumuna uygun üst+alt kombin seç. ${excludeText}Her seferinde farklı bir kombin seç.
+  return `Gardıroptan hava durumuna uygun TAM BİR KOMBİN (Full Outfit) seç. ${excludeText}Her seferinde farklı bir tarz yarat.
 ${profileText}
 Hava: ${Math.round(weather.tempC)}°C, ${weather.description}
 Kıyafetler: ${wardrobeJson}
-Kurallar: topId=Üst Giyim veya soğukta Dış Giyim, bottomId=Alt Giyim. Soğuk→Kışlık, sıcak→Yazlık.
-JSON: {"topId":"...","bottomId":"...","reason":"Türkçe 1 cümle"}`;
+
+KURALLAR:
+1. "topId" (Üst Giyim) ve "bottomId" (Alt Giyim) zorunludur.
+2. "shoesId" (Ayakkabı) varsa zorunludur, yoksa null bırak.
+3. Hava serinse veya kombine şıklık katacaksa "outerwearId" (Dış Giyim) ekle, yoksa null bırak.
+4. Kombini tamamlayacak "accessoryId" (Takı & Aksesuar) ekle, dolapta yoksa veya gerekmiyorsa null bırak.
+5. JSON çıktısı KESİNLİKLE şu yapıda olmalıdır:
+
+{"topId":"...","bottomId":"...","shoesId":"...","outerwearId":"...","accessoryId":"...","reason":"Türkçe 1 samimi cümle"}`;
 }
 
 function parseGeminiJson(text: string): Omit<OutfitSuggestionResult, 'source'> {
@@ -174,6 +189,9 @@ function parseGeminiJson(text: string): Omit<OutfitSuggestionResult, 'source'> {
   return {
     topId: parsed.topId,
     bottomId: parsed.bottomId,
+    shoesId: parsed.shoesId || null,
+    outerwearId: parsed.outerwearId || null,
+    accessoryId: parsed.accessoryId || null,
     reason: typeof parsed.reason === 'string' ? parsed.reason : 'Hava durumuna uygun bir kombin seçtim.',
   };
 }
@@ -238,9 +256,7 @@ async function callGeminiModel(
     try {
       const errJson = (await res.json()) as GeminiResponse;
       details = errJson.error?.message ?? '';
-    } catch {
-      // ignore
-    }
+    } catch { }
 
     const error = new Error(details || `HTTP ${res.status}`);
     (error as Error & { status?: number }).status = res.status;
@@ -256,7 +272,6 @@ async function callGeminiModel(
   return text;
 }
 
-// KANKA BAKIŞI 4: Bu fonksiyona userProfile'ı ekleyip buildPrompt'a paslıyoruz.
 async function suggestOutfitWithGemini(params: {
   clothes: WardrobeItemForAI[];
   weather: CurrentWeather;
@@ -266,9 +281,7 @@ async function suggestOutfitWithGemini(params: {
 }): Promise<Omit<OutfitSuggestionResult, 'source'>> {
   const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error(
-      'Gemini API anahtarı tanımlı değil. `.env` içine `EXPO_PUBLIC_GEMINI_API_KEY` ekleyin.'
-    );
+    throw new Error('Gemini API anahtarı tanımlı değil.');
   }
 
   const excludeCombinations = params.excludeCombinations ?? [];
@@ -294,8 +307,7 @@ async function suggestOutfitWithGemini(params: {
           excludeCombinations,
         });
         return {
-          topId: local.topId,
-          bottomId: local.bottomId,
+          ...local,
           reason: local.reason,
         };
       }
@@ -321,7 +333,6 @@ async function suggestOutfitWithGemini(params: {
   throw lastError ?? new Error('Gemini modelleri şu an kullanılamıyor.');
 }
 
-// KANKA BAKIŞI 5: Ana dışa aktarılan fonksiyona userProfile desteğini ekledik.
 export async function suggestOutfit(params: {
   clothes: WardrobeItemForAI[];
   weather: CurrentWeather;
@@ -335,7 +346,7 @@ export async function suggestOutfit(params: {
     const local = suggestOutfitLocally(params);
     return {
       ...local,
-      reason: `${local.reason} (Gemini API anahtarı eklenmedi, hava durumuna göre seçildi.)`,
+      reason: `${local.reason} (Gemini kapalı, hava durumuna göre yerel seçim.)`,
     };
   }
 
@@ -347,17 +358,15 @@ export async function suggestOutfit(params: {
     const status = (error as Error & { status?: number }).status ?? 0;
 
     if (isInvalidApiKeyError(status, message)) {
-      throw new Error('Gemini API anahtarı geçersiz. AI Studio\'dan yeni bir anahtar al.');
+      throw new Error('Gemini API anahtarı geçersiz.');
     }
 
     const local = suggestOutfitLocally(params);
-    const hint = isQuotaOrRateLimitError(status, message)
-      ? 'Gemini kotası doluydu'
-      : 'Gemini şu an kullanılamıyor';
+    const hint = isQuotaOrRateLimitError(status, message) ? 'Gemini kotası doluydu' : 'Gemini kullanılamıyor';
 
     return {
       ...local,
-      reason: `${local.reason} (${hint}, hava durumuna göre seçildi.)`,
+      reason: `${local.reason} (${hint}, yerel seçim.)`,
     };
   }
 }

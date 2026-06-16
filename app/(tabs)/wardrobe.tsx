@@ -73,10 +73,8 @@ export default function WardrobeScreen() {
     }
   };
 
-  // --- GARANTİLİ SAF JSON VEREN AI ANALİZ FONKSİYONU ---
   const analyzeImageWithAI = async (base64Image: string) => {
     try {
-      // KANKA BAKIŞI: Burada responseMimeType ekleyerek Gemini'ı sadece saf JSON dönmeye zorluyoruz.
       const model = genAI.getGenerativeModel({ 
         model: "gemini-3.5-flash",
         generationConfig: { responseMimeType: "application/json" }
@@ -98,12 +96,9 @@ export default function WardrobeScreen() {
       ]);
   
       const text = result.response.text();
-      console.log("Gemini Temiz Çıktı kanka:", text); // Test ederken terminalden doğruluğuna bakarsın
-      
       return JSON.parse(text.trim());
     } catch (error) {
       console.error("AI Analiz Döngü Hatası:", error);
-      // Eğer yine de bir hata olursa en azından patlamasın ama hatayı terminale bassın
       throw new Error("Yapay zeka görseli okurken bir hata oluştu kanka, tekrar dene.");
     }
   };
@@ -142,13 +137,9 @@ export default function WardrobeScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Oturum açman lazım.");
       
-      // 1. Arka Planı Sil
       const transparentBase64 = await removeBackground(selectedImage);
-      
-      // 2. Akıllı Yapay Zeka Analizi
       const aiAnalysis = await analyzeImageWithAI(transparentBase64);
       
-      // 3. Dosya İsmi Belirle ve Supabase Storage'a Yükle
       const fileName = `${user.id}/${Date.now()}_ai_cleaned.png`;
       const fileData = decode(transparentBase64);
       
@@ -160,7 +151,6 @@ export default function WardrobeScreen() {
 
       const { data: { publicUrl } } = supabase.storage.from('clothes').getPublicUrl(fileName);
       
-      // 4. Veritabanına Ekleme
       const insertData: any = { 
         user_id: user.id, 
         image_url: publicUrl, 
@@ -240,22 +230,25 @@ export default function WardrobeScreen() {
                 <Text style={styles.interiorHeaderText}>Dijital Gardırop</Text>
                 <TouchableOpacity onPress={closeCloset}><X size={24} color="rgba(255,255,255,0.6)" /></TouchableOpacity>
               </View>
-              <View style={styles.categoryGrid}>
-                {CATEGORY_DATA.map(cat => (
-                  <TouchableOpacity key={cat.id} style={styles.categoryCard} onPress={() => { 
-                      Haptics.selectionAsync();
-                      setSelectedCategory(cat.id); 
-                      setClosetStep(2); 
-                  }}>
-                    <ImageBackground source={{ uri: cat.img }} style={styles.catImage} imageStyle={{borderRadius: 20}}>
-                        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.catOverlay}>
-                            {cat.icon}
-                            <Text style={styles.catLabel}>{cat.label}</Text>
-                        </LinearGradient>
-                    </ImageBackground>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              {/* KANKA BAKIŞI: Kategoriler artık ScrollView içinde, altlarında bol boşluk var */}
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
+                <View style={styles.categoryGrid}>
+                  {CATEGORY_DATA.map(cat => (
+                    <TouchableOpacity key={cat.id} style={styles.categoryCard} onPress={() => { 
+                        Haptics.selectionAsync();
+                        setSelectedCategory(cat.id); 
+                        setClosetStep(2); 
+                    }}>
+                      <ImageBackground source={{ uri: cat.img }} style={styles.catImage} imageStyle={{borderRadius: 20}}>
+                          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.8)']} style={styles.catOverlay}>
+                              {cat.icon}
+                              <Text style={styles.catLabel}>{cat.label}</Text>
+                          </LinearGradient>
+                      </ImageBackground>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
             </Animated.View>
           )}
 
@@ -363,7 +356,7 @@ const styles = StyleSheet.create({
   interiorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
   interiorHeaderText: { color: '#fff', fontSize: 22, fontWeight: 'bold' },
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 15 },
-  categoryCard: { width: '47%', aspectRatio: 0.9 },
+  categoryCard: { width: '47%', aspectRatio: 0.9, marginBottom: 15 }, // KANKA BAKIŞI: Kartların arasına alt boşluk (margin) eklendi
   catImage: { flex: 1 },
   catOverlay: { flex: 1, justifyContent: 'flex-end', padding: 15, borderRadius: 20 },
   catLabel: { color: '#fff', fontSize: 16, fontWeight: 'bold', marginTop: 8 },
