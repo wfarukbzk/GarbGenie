@@ -6,6 +6,13 @@ export type WardrobeItemForAI = {
   season: string;
 };
 
+// KANKA BAKIŞI 1: Kullanıcı profili için yeni bir Tip (Type) ekliyoruz
+export type UserProfileForAI = {
+  age?: number;
+  gender?: string;
+  profession?: string;
+};
+
 export type OutfitCombinationKey = {
   topId: string;
   bottomId: string;
@@ -126,10 +133,12 @@ export function suggestOutfitLocally(params: {
   return { topId: top.id, bottomId: bottom.id, reason, source: 'local' };
 }
 
+// KANKA BAKIŞI 2: buildPrompt fonksiyonuna userProfile parametresini ekliyoruz.
 function buildPrompt(
   clothes: WardrobeItemForAI[],
   weather: CurrentWeather,
-  excludeCombinations: OutfitCombinationKey[]
+  excludeCombinations: OutfitCombinationKey[],
+  userProfile?: UserProfileForAI
 ): string {
   const wardrobeJson = JSON.stringify(clothes);
   const excludeText =
@@ -137,7 +146,13 @@ function buildPrompt(
       ? `Tekrar etme, bu kombinleri önerme: ${JSON.stringify(excludeCombinations)}. `
       : '';
 
+  // KANKA BAKIŞI 3: Profil bilgilerini metin haline getiriyoruz. Eğer bilgi yoksa boş dönecek.
+  const profileText = userProfile 
+    ? `Kullanıcı Profili - Yaş: ${userProfile.age || 'Belirtilmemiş'}, Cinsiyet: ${userProfile.gender || 'Belirtilmemiş'}, Meslek/Tarz: ${userProfile.profession || 'Belirtilmemiş'}. Lütfen kombin önerisini bu kişisel bilgilere uygun tarzda yap. ` 
+    : '';
+
   return `Gardıroptan hava durumuna uygun üst+alt kombin seç. ${excludeText}Her seferinde farklı bir kombin seç.
+${profileText}
 Hava: ${Math.round(weather.tempC)}°C, ${weather.description}
 Kıyafetler: ${wardrobeJson}
 Kurallar: topId=Üst Giyim veya soğukta Dış Giyim, bottomId=Alt Giyim. Soğuk→Kışlık, sıcak→Yazlık.
@@ -241,9 +256,11 @@ async function callGeminiModel(
   return text;
 }
 
+// KANKA BAKIŞI 4: Bu fonksiyona userProfile'ı ekleyip buildPrompt'a paslıyoruz.
 async function suggestOutfitWithGemini(params: {
   clothes: WardrobeItemForAI[];
   weather: CurrentWeather;
+  userProfile?: UserProfileForAI;
   excludeCombinations?: OutfitCombinationKey[];
   signal?: AbortSignal;
 }): Promise<Omit<OutfitSuggestionResult, 'source'>> {
@@ -262,7 +279,7 @@ async function suggestOutfitWithGemini(params: {
     throw new Error('Kombin için yeterli üst ve alt giyim bulunamadı.');
   }
 
-  const prompt = buildPrompt(params.clothes, params.weather, excludeCombinations);
+  const prompt = buildPrompt(params.clothes, params.weather, excludeCombinations, params.userProfile);
   let lastError: Error | null = null;
 
   for (const model of GEMINI_MODELS) {
@@ -304,9 +321,11 @@ async function suggestOutfitWithGemini(params: {
   throw lastError ?? new Error('Gemini modelleri şu an kullanılamıyor.');
 }
 
+// KANKA BAKIŞI 5: Ana dışa aktarılan fonksiyona userProfile desteğini ekledik.
 export async function suggestOutfit(params: {
   clothes: WardrobeItemForAI[];
   weather: CurrentWeather;
+  userProfile?: UserProfileForAI;
   excludeCombinations?: OutfitCombinationKey[];
   signal?: AbortSignal;
 }): Promise<OutfitSuggestionResult> {

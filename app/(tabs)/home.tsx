@@ -314,15 +314,15 @@ export default function HomeScreen() {
     setIsSuggesting(true);
     try {
       const {
-        data: { user },
+        data: { user: currentUser }, // currentUser olarak cektik ki state'deki user ile karismasin
         error: userError,
       } = await supabase.auth.getUser();
-      if (userError || !user) {
+      if (userError || !currentUser) {
         Alert.alert('Oturum', 'Kombin olusturmak icin giris yapman lazim kanka.');
         return;
       }
 
-      const { data: clothes, error } = await supabase.from('clothes').select('*').eq('user_id', user.id);
+      const { data: clothes, error } = await supabase.from('clothes').select('*').eq('user_id', currentUser.id);
       if (error) throw error;
 
       if (!clothes || clothes.length < 2) {
@@ -343,6 +343,13 @@ export default function HomeScreen() {
           ? weatherState.weather
           : { tempC: 20, description: 'bilinmiyor', city: undefined };
 
+      // KANKA BAKIŞI: Dinamik Profil Verilerini Çekiyoruz!
+      const userProfile = {
+        age: currentUser.user_metadata?.age ? Number(currentUser.user_metadata.age) : undefined,
+        gender: currentUser.user_metadata?.gender || undefined,
+        profession: currentUser.user_metadata?.profession || undefined,
+      };
+
       const suggestion = await suggestOutfit({
         clothes: clothes.map((item: ClothingItem) => ({
           id: item.id,
@@ -351,6 +358,7 @@ export default function HomeScreen() {
         })),
         weather,
         excludeCombinations: recentCombinations,
+        userProfile, // Dinamik veriyi AI'a besledik
       });
 
       const top = clothes.find((item: ClothingItem) => item.id === suggestion.topId);

@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Home, Shirt, User } from 'lucide-react-native';
+import { Home, MessageCircle, Shirt, User } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
@@ -20,6 +20,14 @@ export default function TabLayout() {
         options={{
           title: 'Dolabım',
           tabBarIcon: ({ color }) => <Shirt size={24} color={color} />,
+        }}
+      />
+      {/* Diğer sekmelerin (Home, Wardrobe vs.) altına bunu ekle */}
+      <Tabs.Screen
+        name="doctor"
+        options={{
+          title: 'Doktor',
+          tabBarIcon: ({ color }) => <MessageCircle size={24} color={color} />,
         }}
       />
       <Tabs.Screen
